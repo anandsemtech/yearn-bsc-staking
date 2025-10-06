@@ -1,0 +1,44 @@
+:root {
+/* Brand palette */
+--yt-bg: #080b16;
+--yt-bg-soft: #0b1020;
+--yt-card: #0f1630;
+--yt-border: #1f2a4a;
+--yt-accent: #6c5ce7; /* purple */
+--yt-text: #e5e7eb;
+--yt-text-dim: #9aa4b2;
+--yt-radius: 16px;
+}
+
+
+html, body, #root { height: 100%; }
+
+
+.yt-bg { background: radial-gradient(1200px 800px at 20% -10%, #1b2452 0%, rgba(27,36,82,0) 60%), var(--yt-bg); color: var(--yt-text); }
+
+
+.yt-card {
+background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+border: 1px solid var(--yt-border);
+border-radius: var(--yt-radius);
+padding: 28px;
+box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+
+
+.yt-title { font-size: 28px; margin: 2px 0 6px; }
+.yt-sub { color: var(--yt-text-dim); margin: 0; }
+
+
+/* App shell */
+.yt-shell { min-height: 100dvh; background: var(--yt-bg); color: var(--yt-text); }
+.yt-header { display:flex; align-items:center; justify-content:space-between; padding: 16px 20px; border-bottom: 1px solid var(--yt-border); background: var(--yt-bg-soft); position: sticky; top:0; }
+.yt-brand { display:flex; gap:10px; align-items:center; font-weight:600; letter-spacing: .2px; }
+.yt-brand img { width: 28px; height: 28px; }
+
+
+.yt-main { max-width: 1100px; margin: 22px auto; padding: 0 20px; }
+.yt-panel { background: var(--yt-card); border: 1px solid var(--yt-border); border-radius: var(--yt-radius); padding: 20px; }
+.yt-panel-title { margin: 0 0 6px; font-size: 18px; }
+.yt-muted { color: var(--yt-text-dim); margin: 6px 0; }
+.yt-code { display:block; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; background: #0a0f22; border: 1px solid #1a2240; padding: 10px 12px; border-radius: 12px; overflow:auto; }

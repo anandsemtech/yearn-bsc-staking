@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/providers/appkitprovider.tsx","./src/routes/dashboard.tsx","./src/routes/welcome.tsx"],"errors":true,"version":"5.9.3"}
