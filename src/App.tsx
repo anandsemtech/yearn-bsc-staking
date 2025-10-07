@@ -5,8 +5,6 @@ import {
   Route,
   Navigate,
   Outlet,
-  useNavigate,
-  useLocation,
 } from "react-router-dom";
 import { useAccount } from "wagmi";
 
@@ -15,38 +13,42 @@ import ToastHub from "@/components/ui/ToastHub";
 import Welcome from "./routes/WelcomeScreen";
 import Dashboard from "./routes/Dashboard";
 
-/** Watches wallet state and keeps URL in sync */
-function RouterSync() {
-  const { isConnected, status } = useAccount();
-  const navigate = useNavigate();
-  const location = useLocation();
+/** Guards
+ * - RedirectIfConnected: If wallet is connected, go to /dashboard (used on '/')
+ * - RequireConnected: If wallet is NOT connected, send to '/' (used on '/dashboard')
+ */
+function RedirectIfConnected() {
+  const { isConnected, address } = useAccount();
+  if (isConnected && address) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <Outlet />;
+}
 
-  React.useEffect(() => {
-    const onDashboard = location.pathname.startsWith("/dashboard");
+function RequireConnected() {
+  const { status, isConnected, address } = useAccount();
 
-    // When connected → go to dashboard
-    if (status === "connected" && !onDashboard) {
-      navigate("/dashboard", { replace: true });
-      return;
-    }
+  // While AppKit/wagmi is restoring a session, avoid flicker
+  if (status === "connecting" || status === "reconnecting") {
+    return (
+      <div className="min-h-[40vh] grid place-items-center text-sm text-gray-400">
+        Checking wallet…
+      </div>
+    );
+  }
 
-    // When not connected → keep on welcome
-    if (status === "disconnected" && onDashboard) {
-      navigate("/", { replace: true });
-      return;
-    }
-    // Note: when status === "reconnecting", AppKit is restoring the session.
-    // We don't redirect until it settles to connected/disconnected.
-  }, [status, isConnected, location.pathname, navigate]);
+  if (isConnected && address) {
+    return <Outlet />;
+  }
 
-  return null;
+  // Not connected → back to welcome
+  return <Navigate to="/" replace />;
 }
 
 /** App shell present on every route */
 function Shell() {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
-      <RouterSync />
       <Header />
       <main>
         <Outlet />
@@ -60,8 +62,16 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route path="/" element={<Welcome />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        {/* Public: if already connected, redirect to /dashboard */}
+        <Route element={<RedirectIfConnected />}>
+          <Route path="/" element={<Welcome />} />
+        </Route>
+
+        {/* Private: only when connected */}
+        <Route element={<RequireConnected />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+        </Route>
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
