@@ -1,16 +1,19 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
-import { AppKitProvider } from './providers/AppKitProvider'
-import App from './App'
+import { Buffer } from "buffer";
+(window as any).Buffer = (window as any).Buffer || Buffer;
 
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { AppKitProvider } from "./providers/AppKitProvider";
+import App from "./App";
+import "./theme.css";
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-<React.StrictMode>
-<AppKitProvider>
-<BrowserRouter>
-<App />
-</BrowserRouter>
-</AppKitProvider>
-</React.StrictMode>
-)
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <AppKitProvider>
+      <BrowserRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <App />
+      </BrowserRouter>
+    </AppKitProvider>
+  </React.StrictMode>
+);

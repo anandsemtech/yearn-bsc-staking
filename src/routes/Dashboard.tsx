@@ -1,42 +1,42 @@
-import React from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useAppKitAccount } from '@reown/appkit/react'
-
+// src/routes/Dashboard.tsx
+import React, { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAppKitAccount } from "@reown/appkit/react";
 
 export default function Dashboard() {
-const navigate = useNavigate()
-const { address, isConnected } = useAppKitAccount()
+  const navigate = useNavigate();
+  const { address, isConnected } = useAppKitAccount();
 
+  // Redirect safely when disconnected
+  useEffect(() => {
+    if (!isConnected) navigate("/");
+  }, [isConnected, navigate]);
 
-if (!isConnected) {
-// Guard: if user disconnects, push them back to the welcome page
-navigate('/')
-}
+  if (!isConnected) return null; // prevents a flash before redirect
 
+  // Use the image from public/ (no import)
+  const logo = "/assets/yearn_logo.png";
 
-return (
-<div style={{ padding: 24, fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto' }}>
-<header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-<h2 style={{ margin: 0 }}>Dashboard</h2>
-{/** Reuse the same AppKit button (shows avatar, balance if connected) */}
-<appkit-button balance="show"></appkit-button>
-</header>
+  return (
+    <div className="yt-shell">
+      <header className="yt-header">
+        <div className="yt-brand">
+          <img src={logo} alt="YearnTogether" />
+          <span>YearnTogether</span>
+        </div>
+        <appkit-button balance="show"></appkit-button>
+      </header>
 
-
-<section style={{ marginTop: 24 }}>
-<p style={{ fontSize: 14, opacity: 0.8 }}>Connected address:</p>
-<div style={{
-padding: '12px 16px', border: '1px solid #e5e7eb', borderRadius: 12,
-fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas'
-}}>
-{address}
-</div>
-
-
-<p style={{ marginTop: 24, opacity: 0.7 }}>
-From here we can gradually add cards for **Active Stakes**, **Packages**, etc.
-</p>
-</section>
-</div>
-)
+      <main className="yt-main">
+        <section className="yt-panel">
+          <h2 className="yt-panel-title">Welcome</h2>
+          <p className="yt-muted">Connected address</p>
+          <code className="yt-code">{address}</code>
+          <p className="yt-muted" style={{ marginTop: 16 }}>
+            We’ll add cards for Active Stakes, Packages, and Claims here.
+          </p>
+        </section>
+      </main>
+    </div>
+  );
 }

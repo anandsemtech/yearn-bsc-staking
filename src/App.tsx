@@ -1,6 +1,6 @@
 import React from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import Welcome from './routes/Welcome'
+import Welcome from './routes/WelcomeScreen'
 import Dashboard from './routes/Dashboard'
 
 
