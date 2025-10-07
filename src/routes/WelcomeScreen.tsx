@@ -1,19 +1,6 @@
 import {
-  Star,
-  TrendingUp,
-  Users,
-  Shield,
-  Zap,
-  Globe,
-  Lock,
-  Hexagon,
-  Triangle,
-  Circle,
-  Diamond,
-  Brain,
-  Cpu,
-  Network,
-  Bot,
+  Star, TrendingUp, Users, Shield, Zap, Globe, Lock,
+  Hexagon, Triangle, Circle, Diamond, Brain, Cpu, Network, Bot
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 
@@ -22,21 +9,10 @@ const WelcomeScreen: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [time, setTime] = useState(0);
 
-  
-  
-
-  
-
   useEffect(() => {
     setIsLoaded(true);
-    const handleMouseMove = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-    };
-
-    const timer = setInterval(() => {
-      setTime((prev) => prev + 1);
-    }, 100);
-
+    const handleMouseMove = (e: MouseEvent) => setMousePosition({ x: e.clientX, y: e.clientY });
+    const timer = setInterval(() => setTime((prev) => prev + 1), 100);
     window.addEventListener("mousemove", handleMouseMove);
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
@@ -58,51 +34,65 @@ const WelcomeScreen: React.FC = () => {
     { label: "Networks", value: "15+", icon: Globe, color: "orange" },
   ];
 
-  const FloatingShape = ({ shape, color, size, delay, duration }: { shape: React.ElementType; color: string; size: string; delay: number; duration: number; }) => {
+  const FloatingShape = ({
+    shape, color, size, delay, duration
+  }: { shape: React.ElementType; color: string; size: string; delay: number; duration: number; }) => {
     const ShapeIcon = shape;
     return (
-      <div className={`absolute opacity-20 animate-float`}
+      <div className="absolute opacity-20 animate-float"
         style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, animationDelay: `${delay}s`, animationDuration: `${duration}s`, transform: `rotate(${time * 2}deg)` }}>
         <ShapeIcon className={`w-${size} h-${size} text-${color}-400`} />
       </div>
     );
   };
 
-  const AIFloatingObject = ({ icon: Icon, color, size, delay, duration }: { icon: React.ElementType; color: string; size: string | number; delay: number; duration: number; }) => {
-    return (
-      <div className={`absolute opacity-30 animate-float`}
-        style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, animationDelay: `${delay}s`, animationDuration: `${duration}s`, transform: `rotate(${Math.sin(time * 0.02 + delay) * 30}deg) scale(${1 + Math.sin(time * 0.03 + delay) * 0.2})` }}>
-        <div className={`relative w-${size} h-${size}`}>
-          <div className={`absolute inset-0 bg-${color}-400 rounded-full blur-lg opacity-50 animate-pulse`} />
-          <div className={`relative w-full h-full bg-gradient-to-br from-${color}-500 to-${color}-600 rounded-full flex items-center justify-center`}>
-            <Icon className={`w-${Math.floor(Number(size) / 2)} h-${Math.floor(Number(size) / 2)} text-white animate-pulse`} />
-          </div>
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className={`absolute w-1 h-8 bg-${color}-400 opacity-60`}
-                 style={{ left: "50%", top: "50%", transform: `translate(-50%, -50%) rotate(${120 * i + time * 3}deg) translateY(-${Number(size) * 2}px)`, transformOrigin: "center bottom" }} />
-          ))}
-          {[...Array(4)].map((_, i) => (
-            <div key={`neural-${i}`} className={`absolute w-px h-12 bg-gradient-to-t from-${color}-400 to-transparent opacity-40`}
-                 style={{ left: "50%", top: "50%", transform: `translate(-50%, -50%) rotate(${90 * i + time * 1.5}deg) translateY(-${Number(size) * 1.5}px)`, transformOrigin: "center bottom" }} />
-          ))}
+  const AIFloatingObject = ({
+    icon: Icon, color, size, delay, duration
+  }: { icon: React.ElementType; color: string; size: string | number; delay: number; duration: number; }) => (
+    <div className="absolute opacity-30 animate-float"
+      style={{
+        left: `${Math.random() * 100}%`,
+        top: `${Math.random() * 100}%`,
+        animationDelay: `${delay}s`,
+        animationDuration: `${duration}s`,
+        transform: `rotate(${Math.sin(time * 0.02 + delay) * 30}deg) scale(${1 + Math.sin(time * 0.03 + delay) * 0.2})`
+      }}>
+      <div className={`relative w-${size} h-${size}`}>
+        <div className={`absolute inset-0 bg-${color}-400 rounded-full blur-lg opacity-50 animate-pulse`} />
+        <div className={`relative w-full h-full bg-gradient-to-br from-${color}-500 to-${color}-600 rounded-full flex items-center justify-center`}>
+          <Icon className={`w-${Math.floor(Number(size) / 2)} h-${Math.floor(Number(size) / 2)} text-white animate-pulse`} />
         </div>
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className={`absolute w-1 h-8 bg-${color}-400 opacity-60`}
+               style={{ left: "50%", top: "50%", transform: `translate(-50%, -50%) rotate(${120 * i + time * 3}deg) translateY(-${Number(size) * 2}px)`, transformOrigin: "center bottom" }} />
+        ))}
+        {[...Array(4)].map((_, i) => (
+          <div key={`neural-${i}`} className={`absolute w-px h-12 bg-gradient-to-t from-${color}-400 to-transparent opacity-40`}
+               style={{ left: "50%", top: "50%", transform: `translate(-50%, -50%) rotate(${90 * i + time * 1.5}deg) translateY(-${Number(size) * 1.5}px)`, transformOrigin: "center bottom" }} />
+        ))}
       </div>
-    );
-  };
+    </div>
+  );
 
   const ParticleField = ({ count, color }: { count: number; color: string; }) => (
     <>
       {[...Array(count)].map((_, i) => (
         <div key={i}
           className={`absolute w-1 h-1 bg-${color}-400 rounded-full animate-pulse`}
-          style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, animationDelay: `${Math.random() * 3}s`, animationDuration: `${1 + Math.random() * 2}s`, transform: `translate(${Math.sin(time * 0.1 + i) * 20}px, ${Math.cos(time * 0.1 + i) * 20}px)` }} />
+          style={{
+            left: `${Math.random() * 100}%`,
+            top: `${Math.random() * 100}%`,
+            animationDelay: `${Math.random() * 3}s`,
+            animationDuration: `${1 + Math.random() * 2}s`,
+            transform: `translate(${Math.sin(time * 0.1 + i) * 20}px, ${Math.cos(time * 0.1 + i) * 20}px)`
+          }} />
       ))}
     </>
   );
 
   return (
     <div className="min-h-screen bg-black relative overflow-hidden">
-      {/* Dynamic Animated Background */}
+      {/* Background */}
       <div className="absolute inset-0">
         <div className="absolute w-[600px] h-[600px] rounded-full opacity-30 blur-3xl animate-pulse-slow"
              style={{ background: "radial-gradient(circle, rgba(139,92,246,0.8) 0%, rgba(59,130,246,0.6) 50%, transparent 100%)", left: `${mousePosition.x * 0.03}px`, top: `${mousePosition.y * 0.03}px`, transform: "translate(-50%, -50%)", animation: "pulse 4s ease-in-out infinite" }} />
@@ -120,7 +110,7 @@ const WelcomeScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* AI Floating Objects */}
+      {/* Floating objects */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <AIFloatingObject icon={Brain} color="purple" size="12" delay={0} duration={8} />
         <AIFloatingObject icon={Cpu} color="blue" size="10" delay={1} duration={10} />
@@ -128,19 +118,17 @@ const WelcomeScreen: React.FC = () => {
         <AIFloatingObject icon={Bot} color="orange" size="14" delay={3} duration={9} />
         <AIFloatingObject icon={Brain} color="pink" size="9" delay={4} duration={11} />
         <AIFloatingObject icon={Cpu} color="cyan" size="11" delay={5} duration={7} />
-
         <FloatingShape shape={Hexagon} color="purple" size="8" delay={0} duration={8} />
         <FloatingShape shape={Triangle} color="blue" size="6" delay={1} duration={10} />
         <FloatingShape shape={Circle} color="green" size="4" delay={2} duration={12} />
         <FloatingShape shape={Diamond} color="orange" size="5" delay={3} duration={9} />
         <FloatingShape shape={Star} color="pink" size="7" delay={4} duration={11} />
-
         <ParticleField count={20} color="purple" />
         <ParticleField count={15} color="blue" />
         <ParticleField count={10} color="green" />
       </div>
 
-      {/* Main Content */}
+      {/* Content */}
       <div className="relative z-10 min-h-screen flex items-center justify-center p-4">
         <div className="max-w-7xl mx-auto text-center">
           <div className={`mb-16 transition-all duration-1000 ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"}`}>
@@ -165,6 +153,7 @@ const WelcomeScreen: React.FC = () => {
             </div>
           </div>
 
+          {/* Stats */}
           <div className={`mb-16 transition-all duration-1000 delay-300 ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"}`}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
               {stats.map((stat, index) => (
@@ -182,6 +171,7 @@ const WelcomeScreen: React.FC = () => {
             </div>
           </div>
 
+          {/* Features */}
           <div className={`mb-16 transition-all duration-1000 delay-500 ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"}`}>
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-12 animate-pulse">
               Why Choose <span className="bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">YearnX</span>
@@ -211,6 +201,7 @@ const WelcomeScreen: React.FC = () => {
             </div>
           </div>
 
+          {/* CTA */}
           <div className={`transition-all duration-1000 delay-700 ${isLoaded ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"}`}>
             <div className="relative group">
               <div className="absolute -inset-2 bg-gradient-to-r from-purple-500 via-blue-500 to-cyan-500 rounded-3xl opacity-30 blur-xl group-hover:opacity-50 transition duration-500 animate-pulse" />
@@ -231,11 +222,12 @@ const WelcomeScreen: React.FC = () => {
         </div>
       </div>
 
+      {/* extra twinkle */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {[...Array(15)].map((_, i) => (
           <div key={i} className="absolute animate-float"
                style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, animationDelay: `${Math.random() * 5}s`, animationDuration: `${3 + Math.random() * 4}s` }}>
-            <div className={`w-2 h-2 bg-gradient-to-r from-purple-400 to-cyan-400 rounded-full opacity-60 animate-pulse relative`}>
+            <div className="w-2 h-2 bg-gradient-to-r from-purple-400 to-cyan-400 rounded-full opacity-60 animate-pulse relative">
               <div className="absolute inset-0 bg-white rounded-full opacity-0 animate-ping" style={{ animationDelay: `${Math.random() * 2}s` }} />
             </div>
           </div>
@@ -252,7 +244,6 @@ const WelcomeScreen: React.FC = () => {
           10% { opacity: 1; }
           90% { opacity: 1; }
           100% { transform: translateY(100vh) rotate(45deg); opacity: 0; }
-        }
       `}</style>
     </div>
   );
