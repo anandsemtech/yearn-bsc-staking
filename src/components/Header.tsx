@@ -136,12 +136,9 @@ const BalancesPopover: React.FC<{
   );
 };
 
-/* =========================
-   Header (always dark)
-========================= */
 const Header: React.FC = () => {
   const { isConnected, address } = useAccount();
-  const { open } = useAppKit(); // programmatic wallet modal
+  const { open } = useAppKit();
   const navigate = useNavigate();
 
   const { disconnectAsync } = useDisconnect();
@@ -169,7 +166,7 @@ const Header: React.FC = () => {
 
   const openAppKit = () => open();
 
-  /* On any disconnect (button or from wallet UI), go to Welcome */
+  /* Route to Welcome whenever disconnected (incl. disconnect via wallet UI) */
   useEffect(() => {
     if (!isConnected) navigate("/", { replace: true });
   }, [isConnected, navigate]);
@@ -211,8 +208,11 @@ const Header: React.FC = () => {
     }
   }
 
-  /* Native balance */
-  const { data: nativeBal } = useBalance({ address, watch: true });
+  /* Native balance (no `watch` in this wagmi version) */
+  const { data: nativeBal } = useBalance({
+    address,
+    query: { enabled: Boolean(address) },
+  });
 
   /* ERC20 balances */
   const [erc20, setErc20] = useState<
@@ -299,7 +299,7 @@ const Header: React.FC = () => {
           <div className="flex justify-between items-center h-16">
             {/* Logo */}
             <div className="flex items-center">
-              <YearnTogetherMark className="h-7 text-white" ariaLabel="yearnTogether" />
+              <YearnTogetherMark className="h-7 text-white" />
             </div>
 
             {/* Desktop Nav (only when connected) */}
@@ -339,9 +339,7 @@ const Header: React.FC = () => {
                       <span className="text-sm font-medium text-green-300">{shortAddress}</span>
                       <div className="relative">
                         <button
-                          onClick={async () => {
-                            await copyAddress();
-                          }}
+                          onClick={copyAddress}
                           className="p-1 hover:bg-green-800 rounded transition-colors"
                           title="Copy address"
                           aria-label="Copy address"
@@ -366,7 +364,6 @@ const Header: React.FC = () => {
                   </div>
                 </>
               )}
-              {/* When NOT connected: show nothing in the header (Welcome screen handles connect) */}
             </div>
 
             {/* Mobile Menu Button */}
@@ -458,10 +455,3 @@ const Header: React.FC = () => {
 };
 
 export default Header;
-
-/* typing for custom element */
-declare global {
-  interface HTMLElementTagNameMap {
-    "appkit-button": HTMLElement;
-  }
-}
