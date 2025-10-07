@@ -166,11 +166,7 @@ const Header: React.FC = () => {
 
   const openAppKit = () => open();
 
-  /* Route to Welcome whenever disconnected (incl. disconnect via wallet UI) */
-  useEffect(() => {
-    if (!isConnected) navigate("/", { replace: true });
-  }, [isConnected, navigate]);
-
+  
   const handleDisconnect = async () => {
     try {
       await disconnectAsync();

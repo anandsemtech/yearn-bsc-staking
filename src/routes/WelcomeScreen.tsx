@@ -16,20 +16,16 @@ import {
   Bot,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAppKitAccount } from "@reown/appkit/react";
 
 const WelcomeScreen: React.FC = () => {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [isLoaded, setIsLoaded] = useState(false);
   const [time, setTime] = useState(0);
 
-  const navigate = useNavigate();
-  const { isConnected } = useAppKitAccount();
+  
+  
 
-  useEffect(() => {
-    if (isConnected) navigate("/dashboard");
-  }, [isConnected, navigate]);
+  
 
   useEffect(() => {
     setIsLoaded(true);
