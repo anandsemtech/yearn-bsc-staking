@@ -6,11 +6,8 @@ import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { createAppKit } from "@reown/appkit/react";
 import type { AppKitNetwork } from "@reown/appkit/networks";
 import { bsc } from "@reown/appkit/networks";
-// import { http } from "viem"; // <- uncomment if you set custom transports
 
 declare global {
-  // HMR-safe flag so we don't create multiple modals during hot reload
-  // (Vite reloads modules and would re-run createAppKit otherwise)
   var __APPKIT_CREATED__: boolean | undefined;
 }
 
@@ -21,7 +18,6 @@ if (!projectId) {
   throw new Error("Missing VITE_REOWN_PROJECT_ID in environment");
 }
 
-// Start with BSC; add more from @reown/appkit/networks later
 const networks = [bsc] as [AppKitNetwork, ...AppKitNetwork[]];
 
 const metadata = {
@@ -33,7 +29,6 @@ const metadata = {
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 
-// Wagmi adapter for AppKit
 const wagmiAdapter = new WagmiAdapter({
   projectId,
   networks,
@@ -43,7 +38,6 @@ const wagmiAdapter = new WagmiAdapter({
   // }
 });
 
-// Optional: brand the modal
 const appKitTheme = {
   themeMode: "dark" as const,
   themeVariables: {
@@ -59,7 +53,6 @@ const appKitTheme = {
   },
 };
 
-// Create the AppKit modal once (HMR-safe)
 if (!globalThis.__APPKIT_CREATED__) {
   createAppKit({
     adapters: [wagmiAdapter],

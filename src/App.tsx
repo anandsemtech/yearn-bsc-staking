@@ -1,51 +1,52 @@
 // src/App.tsx
 import React from "react";
 import {
+  Routes,
+  Route,
   Navigate,
   Outlet,
-  Route,
-  Routes,
-  useLocation,
   useNavigate,
+  useLocation,
 } from "react-router-dom";
 import { useAccount } from "wagmi";
 
+import Header from "@/components/Header";
+import ToastHub from "@/components/ui/ToastHub";
 import Welcome from "./routes/WelcomeScreen";
 import Dashboard from "./routes/Dashboard";
 
-import Header from "@/components/Header";
-import ToastHub from "@/components/ui/ToastHub";
-
-/** Guards */
-function ProtectedRoute({ children }: { children: React.ReactElement }) {
+/** Watches wallet state and keeps URL in sync */
+function RouterSync() {
   const { isConnected, status } = useAccount();
-  // While connecting/reconnecting, don't bounce the user around
-  if (status === "connecting" || status === "reconnecting") return null;
-  if (!isConnected) return <Navigate to="/" replace />;
-  return children;
-}
+  const navigate = useNavigate();
+  const location = useLocation();
 
-function GuestRoute({ children }: { children: React.ReactElement }) {
-  const { isConnected } = useAccount();
-  if (isConnected) return <Navigate to="/dashboard" replace />;
-  return children;
-}
-
-/** Shell present on every page */
-function Shell() {
-  const { isConnected } = useAccount();
-  const nav = useNavigate();
-  const loc = useLocation();
-
-  // Safety: if user connects while sitting on "/", push them to /dashboard.
   React.useEffect(() => {
-    if (isConnected && (loc.pathname === "/" || loc.pathname === "")) {
-      nav("/dashboard", { replace: true });
-    }
-  }, [isConnected, loc.pathname, nav]);
+    const onDashboard = location.pathname.startsWith("/dashboard");
 
+    // When connected → go to dashboard
+    if (status === "connected" && !onDashboard) {
+      navigate("/dashboard", { replace: true });
+      return;
+    }
+
+    // When not connected → keep on welcome
+    if (status === "disconnected" && onDashboard) {
+      navigate("/", { replace: true });
+      return;
+    }
+    // Note: when status === "reconnecting", AppKit is restoring the session.
+    // We don't redirect until it settles to connected/disconnected.
+  }, [status, isConnected, location.pathname, navigate]);
+
+  return null;
+}
+
+/** App shell present on every route */
+function Shell() {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
+      <RouterSync />
       <Header />
       <main>
         <Outlet />
@@ -59,22 +60,8 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route
-          path="/"
-          element={
-            <GuestRoute>
-              <Welcome />
-            </GuestRoute>
-          }
-        />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/" element={<Welcome />} />
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
