@@ -1,14 +1,11 @@
 /* src/theme.css */
 
-/* Tailwind v4 entry (replaces @tailwind base/components/utilities) */
+/* Tailwind v4 entry */
 @import "tailwindcss";
 
-/* Optional: brand font (remove if you don’t want Google Fonts)
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-*/
-
+/* Brand tokens */
 :root{
-  --yt-bg:#080b16;
+  --yt-bg:#080b16;         /* page background */
   --yt-bg-soft:#0b1020;
   --yt-card:#0f1630;
   --yt-border:#1f2a4a;
@@ -16,34 +13,43 @@
   --yt-text:#e5e7eb;
   --yt-text-dim:#9aa4b2;
   --yt-radius:16px;
+
+  /* Tell the UA we’re dark-only (form controls, scrollbars, etc.) */
+  color-scheme: dark;
 }
 
 @layer base{
   html,body,#root{ height:100% }
+
+  /* Hard-lock dark */
+  html { color-scheme: dark; } /* redundancy is fine */
   body{
-    background:#000;
-    color:var(--yt-text);
+    background: var(--yt-bg);
+    color: var(--yt-text);
     -webkit-font-smoothing:antialiased;
     -moz-osx-font-smoothing:grayscale;
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji", "Segoe UI Symbol";
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
   }
 }
 
-/* Reusable “yt-*” helpers used by Dashboard and the simple welcome */
+/* Reusable “yt-*” helpers */
 @layer components{
   .yt-bg{ @apply min-h-dvh grid place-items-center px-6; }
 
   .yt-card{
     @apply rounded-2xl border border-white/10 bg-white/10 p-6 backdrop-blur-xl;
+    /* optional: tie to token surface */
+    background-color: color-mix(in oklab, var(--yt-card) 85%, transparent);
     box-shadow: 0 0 60px -20px rgba(108,92,231,.35);
   }
 
   .yt-title{ @apply text-3xl sm:text-5xl font-black; }
   .yt-sub{ @apply text-base sm:text-lg text-gray-400; }
 
-  .yt-shell{ @apply min-h-screen bg-black text-gray-100; }
+  .yt-shell{ @apply min-h-screen text-gray-100; }
   .yt-header{
-    @apply sticky top-0 z-30 flex items-center justify-between gap-4 px-4 sm:px-6 py-3 border-b border-white/10 bg-white/5 backdrop-blur-xl;
+    @apply sticky top-0 z-30 flex items-center justify-between gap-4 px-4 sm:px-6 py-3 border-b border-white/10 backdrop-blur-xl;
+    background-color: color-mix(in oklab, var(--yt-bg) 70%, transparent);
   }
   .yt-brand{ @apply flex items-center gap-2 text-sm font-semibold tracking-wide text-gray-200; }
   .yt-brand img{ @apply h-6 w-6; }
@@ -51,7 +57,8 @@
   .yt-main{ @apply mx-auto w-full max-w-6xl p-4 sm:p-6; }
 
   .yt-panel{
-    @apply rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl;
+    @apply rounded-2xl border border-white/10 p-6 backdrop-blur-xl;
+    background-color: color-mix(in oklab, var(--yt-card) 80%, transparent);
     box-shadow: 0 0 60px -20px rgba(88,78,232,.35);
   }
   .yt-panel-title{ @apply text-xl font-bold mb-2; }
