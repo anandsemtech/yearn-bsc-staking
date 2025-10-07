@@ -1,51 +1,41 @@
 // src/App.tsx
-import React, { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import React from "react";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { useAccount } from "wagmi";
 import { useAppKitAccount } from "@reown/appkit/react";
 
 import Welcome from "./routes/WelcomeScreen";
 import Dashboard from "./routes/Dashboard";
-
 import Header from "@/components/Header";
-import ToastHub from "@/components/ui/ToastHub"; // mounted once
+import ToastHub from "@/components/ui/ToastHub";
 
-/** Redirect guard that reacts to wallet connection/disconnection */
-function AuthGate() {
-  const { status, isConnected: wagmiConnected } = useAccount();
+/** Unified connection state (Wagmi OR AppKit) */
+function useIsConnected() {
+  const { isConnected: wagmiConnected } = useAccount();
   const { isConnected: appkitConnected } = useAppKitAccount();
-  const isConnected = wagmiConnected || appkitConnected;
-
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  useEffect(() => {
-    // If connected and sitting on "/", go to dashboard
-    if (isConnected && (location.pathname === "/" || location.pathname === "/welcome")) {
-      navigate("/dashboard", { replace: true });
-      return;
-    }
-    // If not connected and trying to view /dashboard, send back to welcome
-    if (!isConnected && location.pathname.startsWith("/dashboard")) {
-      navigate("/", { replace: true });
-    }
-  }, [isConnected, location.pathname, navigate]);
-
-  return null;
+  return wagmiConnected || appkitConnected;
 }
 
-/** App shell that is present on every route */
+/** Only render children when connected, otherwise bounce to "/" */
+function RequireConnected({ children }: { children: React.ReactNode }) {
+  const isConnected = useIsConnected();
+  return isConnected ? <>{children}</> : <Navigate to="/" replace />;
+}
+
+/** Only render children when DISconnected, otherwise bounce to "/dashboard" */
+function RequireDisconnected({ children }: { children: React.ReactNode }) {
+  const isConnected = useIsConnected();
+  return !isConnected ? <>{children}</> : <Navigate to="/dashboard" replace />;
+}
+
+/** App shell present on every route */
 function Shell() {
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100 transition-colors duration-200 relative">
+    <div className="min-h-screen bg-gray-900 text-gray-100">
       <Header />
-      {/* Auth-based redirects */}
-      <AuthGate />
-      {/* Page content */}
       <main>
         <Outlet />
       </main>
-      {/* Global toasts */}
       <ToastHub />
     </div>
   );
@@ -55,9 +45,23 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route path="/" element={<Welcome />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="*" element={<Navigate to="/" />} />
+        <Route
+          path="/"
+          element={
+            <RequireDisconnected>
+              <Welcome />
+            </RequireDisconnected>
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <RequireConnected>
+              <Dashboard />
+            </RequireConnected>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );
