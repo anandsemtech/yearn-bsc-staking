@@ -31,6 +31,12 @@ function nextEndpoint() {
   if (ENDPOINTS.length > 1) endpointIndex = (endpointIndex + 1) % ENDPOINTS.length;
 }
 
+function currentUrlStrict(): string {
+  const u = currentUrl();
+  if (!u) throw new Error("No subgraph endpoint configured. Set VITE_SUBGRAPH_YEARN.");
+  return u;
+}
+
 // DX-only tag
 export const gql = (strings: TemplateStringsArray, ...values: any[]) =>
   strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""), "");
@@ -66,8 +72,14 @@ function lruGet(key: Key) {
 }
 function lruSet(key: Key, data: any, ttl: number) {
   cache.set(key, { ts: Date.now(), ttl, data });
-  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+  if (cache.size > CACHE_MAX) {
+    const first = cache.keys().next();
+    if (!first.done) {
+      cache.delete(first.value as Key);
+    }
+  }
 }
+
 
 // Errors
 class HttpError extends Error { status: number; body?: string; constructor(status: number, body?: string) { super(`HTTP ${status}`); this.status = status; this.body = body; } }
@@ -111,10 +123,9 @@ export async function subgraphRequest<T = any>(
   variables?: Record<string, any>,
   ttlMs = DEFAULT_TTL
 ): Promise<T> {
-  const url = currentUrl();
-  if (!url) throw new Error("No subgraph endpoint configured. Set VITE_SUBGRAPH_YEARN.");
-
-  const key = `${url}|${query}|${stable(variables ?? {})}`;
+  // use a definite string for the cache key
+  const endpointForKey = currentUrlStrict();
+  const key = `${endpointForKey}|${query}|${stable(variables ?? {})}`;
 
   if (ttlMs > 0) {
     const hit = lruGet(key);
@@ -126,7 +137,8 @@ export async function subgraphRequest<T = any>(
 
   const p = (async () => {
     await takeToken();
-    const res = await withBackoff<T>(() => doFetch<T>(url, query, variables));
+    // IMPORTANT: call currentUrlStrict() INSIDE the retry closure so failover works
+    const res = await withBackoff<T>(() => doFetch<T>(currentUrlStrict(), query, variables));
     if (ttlMs > 0) lruSet(key, res, ttlMs);
     return res;
   })();
@@ -134,6 +146,7 @@ export async function subgraphRequest<T = any>(
   inFlight.set(key, p);
   try { return await p; } finally { inFlight.delete(key); }
 }
+
 
 // Compatibility shim
 export const subgraph = {
