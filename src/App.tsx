@@ -1,37 +1,36 @@
 // src/App.tsx
 import React from "react";
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { useAccount } from "wagmi";
+import { useAppKitAccount } from "@reown/appkit/react";
 
-import Welcome from "./routes/WelcomeScreen";
-import Dashboard from "./routes/Dashboard";
+import { AppKitProvider } from "@/web3/web3.config";
+import Dashboard from "./components/Dashboard";
+import Header from "./components/Header";
+import WelcomeScreen from "./components/WelcomeScreen";
 
-import Header from "@/components/Header";
-import ToastHub from "@/components/ui/ToastHub"; // mounted once
+function Root() {
+  const { status, isConnected: wagmiConnected } = useAccount();
+  const { isConnected: appkitConnected } = useAppKitAccount();
 
-/** App shell that is present on every route */
-function Shell() {
+  // Treat either source as "connected"
+  const isConnected = wagmiConnected || appkitConnected;
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200 relative">
-      {/* Always-on top bar */}
+    <div className="min-h-screen bg-gray-900 text-gray-100 relative">
       <Header />
-      {/* Page content */}
-      <main>
-        <Outlet />
-      </main>
-      {/* Global toasts */}
-      <ToastHub />
+      {isConnected ? (
+        <Dashboard />
+      ) : (
+        <WelcomeScreen connecting={status === "connecting" || status === "reconnecting"} />
+      )}
     </div>
   );
 }
 
 export default function App() {
   return (
-    <Routes>
-      <Route element={<Shell />}>
-        <Route path="/" element={<Welcome />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="*" element={<Navigate to="/" />} />
-      </Route>
-    </Routes>
+    <AppKitProvider>
+      <Root />
+    </AppKitProvider>
   );
 }
