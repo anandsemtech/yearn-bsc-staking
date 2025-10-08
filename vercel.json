@@ -5,11 +5,7 @@
     { "source": "/assets/(.*)", "destination": "/assets/$1" },
     { "source": "/favicon.ico", "destination": "/favicon.ico" },
     { "source": "/robots.txt", "destination": "/robots.txt" },
-
-    // keep API passthrough above SPA rule if you add any serverless API routes
     { "source": "/api/(.*)", "destination": "/api/$1" },
-
-    // ✅ SPA fallback — send all other routes to index.html
     { "source": "/(.*)", "destination": "/" }
   ]
 }
