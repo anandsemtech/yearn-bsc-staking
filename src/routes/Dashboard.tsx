@@ -3,6 +3,7 @@
 // Passes `hasAdvanced` and `honoraryItems` to StakingModal
 import React, { useMemo, useState, useEffect } from "react";
 import { useAccount } from "wagmi";
+import { useNavigate } from "react-router-dom";
 import PackageCards, { PackageData } from "@/components/PackageCards";
 import StakingModal from "@/components/StakingModal";
 import ActivePackages from "@/components/ActivePackages";
@@ -46,7 +47,17 @@ const GlassPanel: React.FC<React.PropsWithChildren<{ title?: string; className?:
 
 export default function Dashboard() {
   const [selectedPackage, setSelectedPackage] = useState<PackageData | null>(null);
-  const { address } = useAccount();
+
+  // Track wallet connection
+  const { address, isConnected } = useAccount();
+  const navigate = useNavigate();
+
+  // Redirect to "/" whenever not connected (covers: direct visit, disconnect, mobile, etc.)
+  useEffect(() => {
+    if (!isConnected || !address) {
+      navigate("/", { replace: true });
+    }
+  }, [isConnected, address, navigate]);
 
   // Active stakes (cached + refreshable)
   const { rows, loading, error, refresh } = useActiveStakes({
