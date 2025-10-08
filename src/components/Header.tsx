@@ -16,6 +16,8 @@ import { useNavigate } from "react-router-dom";
 
 import UserSettingsModal from "./UserSettingsModal";
 import YearnTogetherMark from "./YearnTogetherMark";
+import { motion, AnimatePresence } from "framer-motion";
+
 
 /* ENV token addresses (optional) */
 const YYEARN = (import.meta.env.VITE_YYEARN_ADDRESS ?? "") as Address;
@@ -72,6 +74,7 @@ const Row: React.FC<{ symbol: string; value: string }> = ({ symbol, value }) => 
 );
 
 /* Balances popover / sheet */
+
 const BalancesPopover: React.FC<{
   anchorRef: React.RefObject<HTMLButtonElement>;
   open: boolean;
@@ -81,70 +84,116 @@ const BalancesPopover: React.FC<{
 }> = ({ anchorRef, open, onClose, rows, native }) => {
   const popRef = useRef<HTMLDivElement>(null);
 
+  // Close when clicking outside (desktop)
   useEffect(() => {
     if (!open) return;
-    const handle = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent) => {
       if (!popRef.current || !anchorRef.current) return;
       if (popRef.current.contains(e.target as Node)) return;
       if (anchorRef.current.contains(e.target as Node)) return;
       onClose();
     };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("mousedown", handle);
-    document.addEventListener("keydown", esc);
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onEsc);
     return () => {
-      document.removeEventListener("mousedown", handle);
-      document.removeEventListener("keydown", esc);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onEsc);
     };
   }, [open, onClose, anchorRef]);
+
+  // Lock page scroll when the mobile sheet is open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
   if (!open) return null;
 
   return (
     <>
-      
-{/* Backdrop */}
-<div
-  className="md:hidden fixed inset-0 z-[60] bg-black/50 h-dvh"
-  onClick={onClose}
-/>
+      {/* ---------- Desktop popover (unchanged) ---------- */}
+      <div
+        ref={popRef}
+        className="hidden md:block absolute z-[70] mt-2 w-[360px] right-0 rounded-2xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl p-4"
+        style={{ top: (anchorRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY }}
+      >
+        <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
+        <div className="space-y-2">
+          <Row symbol={native.symbol} value={native.value} />
+          {rows.map((r) => (
+            <Row key={r.symbol} symbol={r.symbol} value={r.value} />
+          ))}
+        </div>
+      </div>
 
-{/* Bottom sheet */}
-<div
-  className="
-    md:hidden fixed inset-x-0 bottom-0 z-[70]
-    rounded-t-2xl border-t border-white/10
-    bg-gray-900/95 backdrop-blur
-    flex flex-col overflow-hidden
-    safe-pt safe-pb max-h-dvh-safe
-  "
->
-  {/* Handle + Title */}
-  <div className="px-4 pt-2">
-    <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-white/20" />
-    <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
-  </div>
+      {/* ---------- Mobile bottom sheet (AppKit-like) ---------- */}
+      <AnimatePresence>
+        {/* Backdrop */}
+        <motion.div
+          key="backdrop"
+          className="md:hidden fixed inset-0 z-[60] bg-black/60"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+          style={{ height: "100dvh" }}
+        />
 
-  {/* Scrollable list */}
-  <div className="flex-1 sheet-scroll px-4 pb-2 space-y-2">
-    <Row symbol={native.symbol} value={native.value} />
-    {rows.map((r) => (
-      <Row key={r.symbol} symbol={r.symbol} value={r.value} />
-    ))}
-  </div>
+        {/* Sheet */}
+        <motion.div
+          key="sheet"
+          className="
+            md:hidden fixed inset-x-0 bottom-0 z-[70]
+            rounded-t-[28px] border-t border-white/10
+            bg-[#1c1f27] text-white
+            shadow-[0_-20px_40px_rgba(0,0,0,0.35)]
+            backdrop-blur
+            flex flex-col overflow-hidden
+          "
+          initial={{ y: "100%" }}
+          animate={{ y: 0 }}
+          exit={{ y: "100%" }}
+          transition={{ type: "spring", stiffness: 380, damping: 32 }}
+          style={{
+            // safe areas + height that won’t get cropped by URL bar
+            paddingTop: "max(env(safe-area-inset-top, 0px), 12px)",
+            paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+            maxHeight:
+              "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
+          }}
+        >
+          {/* Grab handle + header */}
+          <div className="px-5 pt-2">
+            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/20" />
+            <div className="mb-2 text-[11px] uppercase tracking-wide text-white/60">
+              Balances
+            </div>
+          </div>
 
-  {/* Sticky footer */}
-  <div className="px-4 pb-2">
-    <button
-      onClick={onClose}
-      className="w-full rounded-xl bg-white/10 text-white py-2 text-sm hover:bg-white/15"
-    >
-      Close
-    </button>
-  </div>
-</div>
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-2 space-y-2">
+            <Row symbol={native.symbol} value={native.value} />
+            {rows.map((r) => (
+              <Row key={r.symbol} symbol={r.symbol} value={r.value} />
+            ))}
+          </div>
 
-
+          {/* Sticky footer */}
+          <div className="px-5 pb-2">
+            <button
+              onClick={onClose}
+              className="w-full rounded-2xl bg-white/10 hover:bg-white/15 text-white py-2 text-sm"
+            >
+              Close
+            </button>
+          </div>
+        </motion.div>
+      </AnimatePresence>
     </>
   );
 };
