@@ -1,7 +1,7 @@
 // src/components/StakingModal.tsx
 // Robust staking modal with: referral UI+validation, env-driven token meta,
 // BEP-20-safe approvals (YY = EXACT amount, SY/PY = MAX), resilient optimistic refresh,
-// correct 4-arg stake(), multiples/min/balance guards.
+// correct 4-arg stake(), multiples/min/balance guards, and bottom-sheet UX on mobile.
 
 import {
   X,
@@ -68,7 +68,6 @@ interface StakingModalProps {
   // Optional extras used by Dashboard; safe to ignore if you don't need them here
   hasAdvanced?: boolean;
   honoraryItems?: { title: string; imageUrl: string | null; address: `0x${string}` }[];
-
 }
 
 /* ===========================
@@ -172,8 +171,6 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
     return (e as any)?.shortMessage || (e as any)?.message || fallback;
   }
 }
-
-
 
 /* ===========================
    Component
@@ -585,7 +582,6 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
         setIsStaking(false);
         onClose();
       } catch (e) {
-        
         showEvmError(msgFromUnknown(e), { context: "Stake" });
         setActionMsg(normalizeEvmError(e)?.message || (e as any)?.message || "Stake failed");
         setIsStaking(false);
@@ -653,9 +649,7 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
       lastStakeKeyRef.current = null;
       setIsApproving(false);
       setIsStaking(false);
-      
-      showEvmError(msgFromUnknown(e), { context: "Stake" })
-
+      showEvmError(msgFromUnknown(e), { context: "Stake" });
       setActionMsg(normalizeEvmError(e)?.message || (e as any)?.message || "Something went wrong");
     }
   }
@@ -683,10 +677,15 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
      Render
   =========================== */
   return (
-    <div className="fixed inset-0 z-50 flex items-stretch sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-white dark:bg-gray-900 w-full h-full sm:h-auto sm:max-h-[90vh] sm:rounded-2xl shadow-2xl max-w-lg sm:max-w-2xl flex flex-col overflow-hidden">
+    /* Backdrop */
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
+      {/* Dialog (bottom sheet on mobile, centered on ≥sm) */}
+      <div className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-2xl
+                      h-[88vh] sm:h-auto sm:max-h-[90vh] overflow-hidden">
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-4 border-b border-gray-200/60 dark:border-white/10 bg-white/80 dark:bg-gray-900/80 backdrop-blur">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
+                        border-b border-gray-200/60 dark:border-white/10
+                        bg-white/90 dark:bg-gray-900/90 backdrop-blur">
           <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white">
             Stake {pkg.name}
           </h2>
@@ -700,7 +699,7 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 space-y-5">
+        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-4 sm:py-5 space-y-5">
           {/* Summary */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl p-3 sm:p-4 bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 border border-violet-100 dark:border-white/10">
@@ -747,7 +746,7 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
                 {mStep > 1 ? ` • Multiples of ${prettyUSD(mStep)}` : ""}
               </p>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2.5">
                 {mStep > 1 && !isMultipleOk && (
                   <button
                     type="button"
@@ -846,14 +845,16 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
                 {compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`}
               </span>
             </div>
-            <div className="flex flex-wrap gap-2.5">
+
+            <div className="grid grid-template gap-2.5"
+                 style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}>
               {validCompositions.map((c, i) => {
                 const active = i === selectedIdx;
                 return (
                   <button
                     key={`${c.join("-")}-${i}`}
                     onClick={() => setSelectedIdx(i)}
-                    className={`px-4 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
+                    className={`px-3.5 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
                       active
                         ? "bg-violet-600 text-white border-violet-600 shadow-sm"
                         : "bg-white/60 dark:bg-white/5 text-gray-800 dark:text-gray-200 border-gray-300/60 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/10"
@@ -869,31 +870,49 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
           {/* Allocation */}
           <div className="rounded-xl p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10">
             <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Allocation</h3>
-            <div className="grid grid-cols-3 gap-3 text-center">
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
                 { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0] },
                 { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1] },
                 { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2] },
-              ].map((r) => (
-                <div
-                  key={r.label}
-                  className={`rounded-lg px-2 py-2 border ${
-                    r.need > r.have
-                      ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-200/60 dark:border-rose-900/40"
-                      : "bg-white dark:bg-white/5 border-gray-200 dark:border-white/10"
-                  }`}
-                >
-                  <div className="text-[11px] uppercase tracking-wide text-gray-500">{r.label}</div>
-                  <div className="text-sm font-semibold text-gray-900 dark:text-white">
-                    Need {formatWei(r.need ?? 0n, r.dec)}
+              ].map((r) => {
+                const lacking = r.need > r.have;
+                return (
+                  <div
+                    key={r.label}
+                    className={`rounded-lg px-3 py-2 border min-w-0
+                      ${lacking
+                        ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-200/60 dark:border-rose-900/40"
+                        : "bg-white dark:bg-white/5 border-gray-200 dark:border-white/10"}`}
+                  >
+                    <div className="text-[11px] uppercase tracking-wide text-gray-500">{r.label}</div>
+
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
+                      <div className="shrink-0 text-[11px] text-gray-500">Need</div>
+                      <div
+                        className="ml-auto font-semibold text-gray-900 dark:text-white truncate
+                                   text-[clamp(12px,3.7vw,14px)]"
+                        title={`Need ${formatWei(r.need ?? 0n, r.dec)}`}
+                      >
+                        {formatWei(r.need ?? 0n, r.dec)}
+                      </div>
+                    </div>
+
+                    <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
+                      <div className="shrink-0 text-[11px] text-gray-500">Have</div>
+                      <div
+                        className="ml-auto font-medium truncate text-[clamp(11px,3.5vw,13px)]"
+                        title={`Have ${formatWei(r.have, r.dec)}`}
+                      >
+                        {formatWei(r.have, r.dec)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-1 text-[11px]">
-                    <span className="text-gray-500">Have </span>
-                    <span className="font-medium">{formatWei(r.have, r.dec)}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+
             {!hasSufficientBalances && (
               <p className="mt-3 text-xs text-rose-600 dark:text-rose-400">
                 Insufficient balance for the selected allocation. Reduce amount or adjust composition.
@@ -915,7 +934,9 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
         </div>
 
         {/* Footer */}
-        <div className="sticky bottom-0 z-10 p-4 sm:p-5 bg-white/80 dark:bg-gray-900/80 backdrop-blur border-t border-gray-200/60 dark:border-white/10">
+        <div className="sticky bottom-0 z-10 p-4 sm:p-5 bg-white/90 dark:bg-gray-900/90 backdrop-blur
+                        border-t border-gray-200/60 dark:border-white/10
+                        pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={handleApproveAndStake}
