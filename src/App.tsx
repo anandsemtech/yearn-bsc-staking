@@ -6,7 +6,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
 } from "react-router-dom";
 import { useAppKitAccount } from "@reown/appkit/react";
 
@@ -15,54 +14,47 @@ import Dashboard from "./routes/Dashboard";
 import Header from "@/components/Header";
 import ToastHub from "@/components/ui/ToastHub";
 
-/**
- * ConnectionGate
- * - Pushes to /dashboard when connected and at /
- * - Pushes to / when NOT connected and path !== /
- * - Uses a small hydration flag to avoid a first-paint flicker
- */
-function ConnectionGate() {
-  const { isConnected } = useAppKitAccount();
-  const nav = useNavigate();
-  const loc = useLocation();
-
+/** Small gate so we don't redirect during SSR/first paint */
+function useHydrated() {
   const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => setHydrated(true), []);
-
-  React.useEffect(() => {
-    if (!hydrated) return;
-
-    // If user connects on the welcome page → go to dashboard
-    if (isConnected && loc.pathname === "/") {
-      nav("/dashboard", { replace: true });
-      return;
-    }
-
-    // If user is not connected and is on any non-root route → go to welcome
-    if (!isConnected && loc.pathname !== "/") {
-      nav("/", { replace: true });
-      return;
-    }
-  }, [hydrated, isConnected, loc.pathname, nav]);
-
-  return null;
+  return hydrated;
 }
+
+/** Only render children when connected; otherwise push to "/" */
+const ProtectedRoute: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const hydrated = useHydrated();
+  const { isConnected } = useAppKitAccount();
+  const loc = useLocation();
+
+  if (!hydrated) return null; // avoid any flicker
+  if (!isConnected) {
+    return <Navigate to="/" replace state={{ from: loc }} />;
+  }
+  return <>{children}</>;
+};
+
+/** If already connected, skip the welcome and go to dashboard */
+const PublicOnlyRoute: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const hydrated = useHydrated();
+  const { isConnected } = useAppKitAccount();
+
+  if (!hydrated) return null;
+  if (isConnected) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
 
 function Shell() {
   const { pathname } = useLocation();
-  const showHeader = pathname !== "/"; // hide header on welcome
-
+  const showHeader = pathname !== "/"; // no header on the welcome page
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
-      {/* This component performs redirects based on wallet connection */}
-      <ConnectionGate />
-
       {showHeader && <Header />}
-
       <main>
         <Outlet />
       </main>
-
       <ToastHub />
     </div>
   );
@@ -72,13 +64,22 @@ export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        {/* Public welcome page */}
-        <Route path="/" element={<Welcome />} />
-
-        {/* Protected page (ConnectionGate will redirect to / if not connected) */}
-        <Route path="/dashboard" element={<Dashboard />} />
-
-        {/* Catch-all → welcome */}
+        <Route
+          path="/"
+          element={
+            <PublicOnlyRoute>
+              <Welcome />
+            </PublicOnlyRoute>
+          }
+        />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <Dashboard />
+            </ProtectedRoute>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
