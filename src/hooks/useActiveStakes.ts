@@ -27,7 +27,9 @@ function readCache(key: string, ttlMs = TTL_MS_DEFAULT) {
 function writeCache(key: string, data: any) {
   const entry: CacheValue = { t: Date.now(), data };
   MEM.set(key, entry);
-  try { localStorage.setItem(key, JSON.stringify(entry)); } catch {}
+  try {
+    localStorage.setItem(key, JSON.stringify(entry));
+  } catch {}
 }
 
 /* ---------------- GraphQL (single call) ---------------- */
@@ -43,7 +45,7 @@ const Q_ACTIVE_VIEW = gql/* GraphQL */ `
       claimableInterval
       principalLocked
     }
-    stakes(where:{ user: $id }, orderBy: startTime, orderDirection: desc) {
+    stakes(where: { user: $id }, orderBy: startTime, orderDirection: desc) {
       id
       packageId
       totalStaked
@@ -79,10 +81,7 @@ type RawStake = {
   isFullyUnstaked: boolean;
 };
 
-/* ---------------- New: fetch control ---------------- */
-let STAKES_DIRTY = true;
-let LAST_FETCH_AT = 0;
-
+/* ---------------- Fetch control (per-user) ---------------- */
 type Meta = { lastFetchedAt: number; lastNonEmptyAt: number; lastRowCount: number };
 const META_KEY = (id: string) => `activeview:meta:${id}`;
 const EMPTY_COOLDOWN_MS = 5 * 60_000; // 5 min: skip refetch if empty recently
@@ -99,7 +98,25 @@ function readMeta(id: string): Meta {
 function writeMeta(id: string, patch: Partial<Meta>) {
   const prev = readMeta(id);
   const next = { ...prev, ...patch };
-  try { localStorage.setItem(META_KEY(id), JSON.stringify(next)); } catch {}
+  try {
+    localStorage.setItem(META_KEY(id), JSON.stringify(next));
+  } catch {}
+}
+
+// per-user "dirty" flags so one user's events don't affect another
+const DIRTY = new Map<string, boolean>();
+const isDirty = (id: string) => DIRTY.get(id) === true;
+const setDirty = (id: string, v: boolean) => DIRTY.set(id, v);
+
+/* ---------------- Timeout helper ---------------- */
+function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
+  let t: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    t = window.setTimeout(() => reject(new Error("Network timeout")), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (t) clearTimeout(t);
+  }) as Promise<T>;
 }
 
 /* ---------------- Hook ---------------- */
@@ -109,7 +126,12 @@ export function useActiveStakes(opts: {
   softMaxAgeMs?: number;
   ttlMs?: number;
 }) {
-  const { address, requireDirtyOrStale = true, softMaxAgeMs = 120_000, ttlMs = 60_000 } = opts;
+  const {
+    address,
+    requireDirtyOrStale = true,
+    softMaxAgeMs = 120_000,
+    ttlMs = 60_000,
+  } = opts;
   const userId = (address ?? "").toLowerCase();
 
   const [rows, setRows] = useState<ActivePackageRow[]>([]);
@@ -117,117 +139,145 @@ export function useActiveStakes(opts: {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef(false);
 
-  const buildRows = useCallback((pkgs: RawPkg[], stakes: RawStake[]): ActivePackageRow[] => {
-    const pkgMap = new Map<number, {
-      durationInDays: number;
-      aprBps: number;
-      monthlyUnstake: boolean;
-      isActive: boolean;
-      monthlyAPRClaimable: boolean;
-      claimableIntervalSec: number;
-      principalLocked: boolean;
-    }>();
-    for (const p of pkgs) {
-      const idNum = typeof p.packageId === "string" ? Number(p.packageId) : p.packageId;
-      pkgMap.set(idNum, {
-        durationInDays: Number(p.durationInDays || 0),
-        aprBps: Number(p.aprBps || 0),
-        monthlyUnstake: Boolean(p.monthlyUnstake),
-        isActive: Boolean(p.isActive),
-        monthlyAPRClaimable: Boolean(p.monthlyAPRClaimable),
-        claimableIntervalSec: Number(p.claimableInterval || 0),
-        principalLocked: Boolean(p.principalLocked),
+  const buildRows = useCallback(
+    (pkgs: RawPkg[], stakes: RawStake[]): ActivePackageRow[] => {
+      const pkgMap = new Map<
+        number,
+        {
+          durationInDays: number;
+          aprBps: number;
+          monthlyUnstake: boolean;
+          isActive: boolean;
+          monthlyAPRClaimable: boolean;
+          claimableIntervalSec: number;
+          principalLocked: boolean;
+        }
+      >();
+      for (const p of pkgs) {
+        const idNum = typeof p.packageId === "string" ? Number(p.packageId) : p.packageId;
+        pkgMap.set(idNum, {
+          durationInDays: Number(p.durationInDays || 0),
+          aprBps: Number(p.aprBps || 0),
+          monthlyUnstake: Boolean(p.monthlyUnstake),
+          isActive: Boolean(p.isActive),
+          monthlyAPRClaimable: Boolean(p.monthlyAPRClaimable),
+          claimableIntervalSec: Number(p.claimableInterval || 0),
+          principalLocked: Boolean(p.principalLocked),
+        });
+      }
+
+      return stakes.map((s) => {
+        const pkgId = typeof s.packageId === "string" ? Number(s.packageId) : s.packageId;
+        const pkg = pkgMap.get(pkgId);
+
+        const stakeIndexStr = s.id.split("-").pop() || "0";
+        const startSec = Number(s.startTime || 0);
+        const lastClaimSec = Number(s.lastClaimedAt || 0);
+
+        const nextClaimAt =
+          pkg?.monthlyAPRClaimable && pkg?.claimableIntervalSec
+            ? lastClaimSec > 0
+              ? lastClaimSec + pkg.claimableIntervalSec
+              : startSec > 0
+              ? startSec + pkg.claimableIntervalSec
+              : 0
+            : 0;
+
+        const totalStakedWei = BigInt(s.totalStaked || "0");
+        const claimedAprWei = BigInt(s.claimedAPR || "0");
+        const principalWithdrawnWei = BigInt(s.withdrawnPrincipal || "0");
+
+        let amountHuman = "0";
+        try {
+          amountHuman = Number(formatEther(totalStakedWei)).toLocaleString();
+        } catch {}
+
+        const packageActive = Boolean(pkg?.isActive);
+        const fullyUnstaked = Boolean(s.isFullyUnstaked) || principalWithdrawnWei >= totalStakedWei;
+
+        return {
+          id: s.id,
+          packageName: `Package #${pkgId}`,
+          amount: amountHuman,
+          startDate: startSec ? new Date(startSec * 1000) : new Date(0),
+          nextClaimWindow: nextClaimAt ? new Date(nextClaimAt * 1000) : undefined,
+          status: packageActive ? "Active" : "Inactive",
+          stakeIndex: stakeIndexStr,
+          packageId: pkgId,
+          aprPct: pkg ? pkg.aprBps / 100 : undefined,
+
+          isFullyUnstaked: fullyUnstaked,
+          totalStakedWei,
+          claimedAprWei,
+          aprBps: pkg?.aprBps,
+          startTs: startSec || undefined,
+          nextClaimAt: nextClaimAt || undefined,
+          principalWithdrawnWei,
+
+          pkgRules: pkg
+            ? {
+                durationInDays: pkg.durationInDays,
+                aprBps: pkg.aprBps,
+                monthlyUnstake: pkg.monthlyUnstake,
+                isActive: pkg.isActive,
+                monthlyAPRClaimable: pkg.monthlyAPRClaimable,
+                claimableIntervalSec: pkg.claimableIntervalSec,
+                principalLocked: pkg.principalLocked,
+              }
+            : undefined,
+        } as ActivePackageRow;
       });
-    }
-
-    return stakes.map((s) => {
-      const pkgId = typeof s.packageId === "string" ? Number(s.packageId) : s.packageId;
-      const pkg = pkgMap.get(pkgId);
-
-      const stakeIndexStr = (s.id.split("-").pop() || "0");
-      const startSec = Number(s.startTime || 0);
-      const lastClaimSec = Number(s.lastClaimedAt || 0);
-
-      const nextClaimAt =
-        pkg?.monthlyAPRClaimable && pkg.claimableIntervalSec
-          ? (lastClaimSec > 0 ? lastClaimSec + pkg.claimableIntervalSec
-                              : startSec > 0 ? startSec + pkg.claimableIntervalSec : 0)
-          : 0;
-
-      const totalStakedWei = BigInt(s.totalStaked || "0");
-      const claimedAprWei = BigInt(s.claimedAPR || "0");
-      const principalWithdrawnWei = BigInt(s.withdrawnPrincipal || "0");
-
-      let amountHuman = "0";
-      try { amountHuman = Number(formatEther(totalStakedWei)).toLocaleString(); } catch {}
-
-      const packageActive = Boolean(pkg?.isActive);
-      const fullyUnstaked = Boolean(s.isFullyUnstaked) || principalWithdrawnWei >= totalStakedWei;
-
-      return {
-        id: s.id,
-        packageName: `Package #${pkgId}`,
-        amount: amountHuman,
-        startDate: startSec ? new Date(startSec * 1000) : new Date(0),
-        nextClaimWindow: nextClaimAt ? new Date(nextClaimAt * 1000) : undefined,
-        status: packageActive ? "Active" : "Inactive",
-        stakeIndex: stakeIndexStr,
-        packageId: pkgId,
-        aprPct: pkg ? pkg.aprBps / 100 : undefined,
-
-        isFullyUnstaked: fullyUnstaked,
-        totalStakedWei,
-        claimedAprWei,
-        aprBps: pkg?.aprBps,
-        startTs: startSec || undefined,
-        nextClaimAt: nextClaimAt || undefined,
-        principalWithdrawnWei,
-
-        pkgRules: pkg ? {
-          durationInDays: pkg.durationInDays,
-          aprBps: pkg.aprBps,
-          monthlyUnstake: pkg.monthlyUnstake,
-          isActive: pkg.isActive,
-          monthlyAPRClaimable: pkg.monthlyAPRClaimable,
-          claimableIntervalSec: pkg.claimableIntervalSec,
-          principalLocked: pkg.principalLocked,
-        } : undefined,
-      } as ActivePackageRow;
-    });
-  }, []);
+    },
+    []
+  );
 
   const refresh = useCallback(async () => {
-    if (!userId) { setRows([]); setLoading(false); setError(null); return; }
+    // If we don't have a user, clear & stop.
+    if (!userId) {
+      setRows([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
 
     const now = Date.now();
     const meta = readMeta(userId);
 
-    const isStale = now - LAST_FETCH_AT > softMaxAgeMs;
-    const shouldFetchBase = !requireDirtyOrStale || STAKES_DIRTY || isStale;
+    // Use per-user lastFetchedAt from meta (no globals)
+    const isStale = now - (meta.lastFetchedAt || 0) > softMaxAgeMs;
+    const shouldFetchBase = !requireDirtyOrStale || isDirty(userId) || isStale;
 
-    const recentlyEmpty = meta.lastRowCount === 0 && (now - meta.lastFetchedAt) < EMPTY_COOLDOWN_MS;
+    const recentlyEmpty =
+      meta.lastRowCount === 0 && now - (meta.lastFetchedAt || 0) < EMPTY_COOLDOWN_MS;
     const shouldFetch = shouldFetchBase && !recentlyEmpty;
 
     setError(null);
 
     const CK = `activeview:v3:${userId}`;
     const cached = readCache(CK, ttlMs);
+
     if (cached) {
       setRows(buildRows(cached.packages, cached.stakes));
       setLoading(false);
-      if (!shouldFetch) return; // ✅ skip network
+      if (!shouldFetch) return; // ✅ up-to-date enough; skip network
     } else {
+      // IMPORTANT FIX:
+      // If we have no cache *and* shouldn't fetch (e.g., recently empty),
+      // do NOT leave loading=true forever. Show empty immediately.
+      if (!shouldFetch) {
+        setRows([]);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
     }
 
-    if (!shouldFetch) return; // ✅ guard again
-
     try {
-      const data = await subgraph.request<any>(Q_ACTIVE_VIEW, { id: userId });
+      const data = await withTimeout(
+        subgraph.request<any>(Q_ACTIVE_VIEW, { id: userId }),
+        15000
+      );
       if (abortRef.current) return;
-
-      LAST_FETCH_AT = Date.now();
-      STAKES_DIRTY = false;
 
       const payload = {
         packages: (data?.packages || []) as RawPkg[],
@@ -235,14 +285,19 @@ export function useActiveStakes(opts: {
       };
 
       const rowCount = payload.stakes.length;
+      const fetchedAt = Date.now();
+
       writeMeta(userId, {
-        lastFetchedAt: LAST_FETCH_AT,
+        lastFetchedAt: fetchedAt,
         lastRowCount: rowCount,
-        ...(rowCount > 0 ? { lastNonEmptyAt: LAST_FETCH_AT } : {}),
+        ...(rowCount > 0 ? { lastNonEmptyAt: fetchedAt } : {}),
       });
 
       writeCache(CK, payload);
       setRows(buildRows(payload.packages, payload.stakes));
+
+      // Clear dirty flag for this user after a successful fetch
+      setDirty(userId, false);
     } catch (e: any) {
       if (!abortRef.current) setError(e?.message || "Failed to load");
     } finally {
@@ -250,20 +305,29 @@ export function useActiveStakes(opts: {
     }
   }, [userId, ttlMs, buildRows, requireDirtyOrStale, softMaxAgeMs]);
 
-  useEffect(() => { abortRef.current = false; refresh(); return () => { abortRef.current = true; }; }, [refresh]);
+  useEffect(() => {
+    abortRef.current = false;
+    refresh();
+    return () => {
+      abortRef.current = true;
+    };
+  }, [refresh]);
 
   // Refresh on relevant local events
   useEffect(() => {
     let timer: number | null = null;
 
     const invalidate: EventListener = () => {
-      STAKES_DIRTY = true;
+      if (!userId) return;
+      setDirty(userId, true);
       if (timer != null) return;
       timer = window.setTimeout(() => {
         timer = null;
         const CK = `activeview:v3:${userId}`;
         MEM.delete(CK);
-        try { localStorage.removeItem(CK); } catch {}
+        try {
+          localStorage.removeItem(CK);
+        } catch {}
         refresh();
       }, 250);
     };
@@ -279,7 +343,10 @@ export function useActiveStakes(opts: {
 
     names.forEach((n) => window.addEventListener(n, invalidate));
     return () => {
-      if (timer != null) { clearTimeout(timer); timer = null; }
+      if (timer != null) {
+        clearTimeout(timer);
+        timer = null;
+      }
       names.forEach((n) => window.removeEventListener(n, invalidate));
     };
   }, [refresh, userId]);

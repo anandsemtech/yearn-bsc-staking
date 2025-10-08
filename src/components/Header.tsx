@@ -102,36 +102,59 @@ const BalancesPopover: React.FC<{
 
   return (
     <>
-      <div className="fixed inset-0 z-[60] md:hidden bg-black/50" onClick={onClose} />
-      <div
-        ref={popRef}
-        className="hidden md:block absolute z-[70] mt-2 w-[360px] right-0 rounded-2xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl p-4"
-        style={{ top: (anchorRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY }}
-      >
-        <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
-        <div className="space-y-2">
-          <Row symbol={native.symbol} value={native.value} />
-          {rows.map((r) => (
-            <Row key={r.symbol} symbol={r.symbol} value={r.value} />
-          ))}
-        </div>
-      </div>
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-[70] rounded-t-2xl border-t border-white/10 bg-gray-900/95 backdrop-blur p-4">
-        <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-white/20" />
-        <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
-        <div className="space-y-2">
-          <Row symbol={native.symbol} value={native.value} />
-          {rows.map((r) => (
-            <Row key={r.symbol} symbol={r.symbol} value={r.value} />
-          ))}
-        </div>
-        <button
-          onClick={onClose}
-          className="mt-4 w-full rounded-xl bg-white/10 text-white py-2 text-sm hover:bg-white/15"
-        >
-          Close
-        </button>
-      </div>
+      
+{/* Backdrop */}
+<div
+  className="md:hidden fixed inset-0 z-[60] bg-black/50"
+  onClick={onClose}
+  // ensure full visible viewport height on mobile
+  style={{ height: "100dvh" }}
+/>
+
+{/* Bottom sheet */}
+<div
+  className="
+    md:hidden fixed inset-x-0 bottom-0 z-[70]
+    rounded-t-2xl border-t border-white/10
+    bg-gray-900/95 backdrop-blur
+    flex flex-col overflow-hidden
+  "
+  style={{
+    // reserve status-bar & home-indicator areas
+    paddingTop: "max(env(safe-area-inset-top, 0px), 8px)",
+    paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)",
+    // use dynamic viewport height to avoid cropping under URL bar
+    maxHeight:
+      "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
+  }}
+>
+  {/* Handle + Title */}
+  <div className="px-4 pt-2">
+    <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-white/20" />
+    <div className="mb-3 text-xs uppercase tracking-wide text-white/60">
+      Balances
+    </div>
+  </div>
+
+  {/* Scrollable list */}
+  <div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-2 space-y-2">
+    <Row symbol={native.symbol} value={native.value} />
+    {rows.map((r) => (
+      <Row key={r.symbol} symbol={r.symbol} value={r.value} />
+    ))}
+  </div>
+
+  {/* Sticky footer */}
+  <div className="px-4 pb-2">
+    <button
+      onClick={onClose}
+      className="w-full rounded-xl bg-white/10 text-white py-2 text-sm hover:bg-white/15"
+    >
+      Close
+    </button>
+  </div>
+</div>
+
     </>
   );
 };
