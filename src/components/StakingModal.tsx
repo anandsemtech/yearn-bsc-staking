@@ -195,42 +195,65 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
   /* ===========================
      Chain guard
   =========================== */
-  const [chainIssue, setChainIssue] = useState<string | null>(null);
-  useEffect(() => {
-    let stop = false;
-    (async () => {
-      if (!isConnected || !walletClient) return setChainIssue(null);
-      try {
-        const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
-        const onBsc = hex?.toLowerCase() === `0x${bsc.id.toString(16)}`.toLowerCase();
-        if (!stop) setChainIssue(onBsc ? null : "Please switch your wallet to BSC Mainnet");
-      } catch { if (!stop) setChainIssue("Please switch your wallet to BSC Mainnet"); }
-    })();
-    return () => { stop = true; };
-  }, [isConnected, walletClient]);
+  
+
+  // Chain guard
+const [chainIssue, setChainIssue] = useState<string | null>(null);
+
+useEffect(() => {
+  let stop = false;
+
+  // If Wagmi already says BSC, trust it.
+  if (connectedChainId === bsc.id) {
+    setChainIssue(null);
+    return;
+  }
+
+  (async () => {
+    if (!isConnected || !walletClient) {
+      if (!stop) setChainIssue(null); // don’t scare the user while wallet spins up
+      return;
+    }
+    try {
+      const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
+      const onBsc = hex?.toLowerCase() === `0x${bsc.id.toString(16)}`.toLowerCase();
+      if (!stop) setChainIssue(onBsc ? null : "Please switch your wallet to BSC Mainnet");
+    } catch {
+      // If request fails but Wagmi thinks we’re on BSC, treat as OK.
+      if (!stop) {
+        setChainIssue(connectedChainId === bsc.id ? null : "Please switch your wallet to BSC Mainnet");
+      }
+    }
+  })();
+
+  return () => { stop = true; };
+}, [isConnected, walletClient, connectedChainId]);
+
 
   async function ensureBsc() {
-    if (!walletClient) throw new Error("Connect wallet.");
-    const targetHex = `0x${bsc.id.toString(16)}`;
-    const cur = (await walletClient.request({ method: "eth_chainId" })) as string;
-    if (cur?.toLowerCase() === targetHex.toLowerCase()) return;
-    try {
-      await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
-    } catch (e: any) {
-      if (e?.code !== 4902) throw new Error("Please switch your wallet to BSC Mainnet.");
-      await walletClient.request({
-        method: "wallet_addEthereumChain",
-        params: [{
-          chainId: targetHex,
-          chainName: "BSC Mainnet",
-          rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
-          nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
-          blockExplorerUrls: ["https://bscscan.com"],
-        }],
-      });
-      await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
-    }
+  if (!walletClient) throw new Error("Connect wallet.");
+  // Fast path: Wagmi already on BSC.
+  if (connectedChainId === bsc.id) return;
+
+  const targetHex = `0x${bsc.id.toString(16)}`;
+  try {
+    await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+  } catch (e: any) {
+    if (e?.code !== 4902) throw new Error("Please switch your wallet to BSC Mainnet.");
+    await walletClient.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: targetHex,
+        chainName: "BSC Mainnet",
+        rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
+        nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+        blockExplorerUrls: ["https://bscscan.com"],
+      }],
+    });
+    await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
   }
+}
+
 
   /* ===========================
      Compositions
@@ -492,12 +515,22 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
     if (envIssue) return envIssue;
     if (!address) return "Connect wallet.";
 
+   // Chain check (prefer Wagmi)
+  if (connectedChainId !== bsc.id) {
     try {
       if (walletClient) {
         const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
-        if (hex?.toLowerCase() !== `0x${bsc.id.toString(16)}`.toLowerCase()) return "Please switch your wallet to BSC Mainnet.";
+        if (hex?.toLowerCase() !== `0x${bsc.id.toString(16)}`.toLowerCase()) {
+          return "Please switch your wallet to BSC Mainnet.";
+        }
+      } else {
+        return "Please switch your wallet to BSC Mainnet.";
       }
-    } catch { return "Please switch your wallet to BSC Mainnet."; }
+    } catch {
+      return "Please switch your wallet to BSC Mainnet.";
+    }
+  }
+
 
     if (selected[0] + selected[1] + selected[2] !== 100) return "Composition must sum to 100%.";
     if (!meetsMin) return `Amount must be at least ${min}.`;
@@ -689,7 +722,7 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
              flex flex-col overflow-hidden"
 >
 
-                      
+
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
                         border-b border-gray-200/60 dark:border-white/10
@@ -927,7 +960,7 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
 
             {!hasSufficientBalances && (
               <p className="mt-3 text-xs text-rose-600 dark:text-rose-400">
-                Insufficient balance for the selected allocation. Reduce amount or adjust composition.
+                Insufficient balance for the selected allocation.
               </p>
             )}
           </div>
