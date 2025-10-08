@@ -678,10 +678,18 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
   =========================== */
   return (
     /* Backdrop */
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center
+                bg-black/60 backdrop-blur-sm overscroll-contain">
+
       {/* Dialog (bottom sheet on mobile, centered on ≥sm) */}
-      <div className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-2xl
-                      h-[88vh] sm:h-auto sm:max-h-[90vh] overflow-hidden">
+      <div
+  className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl
+             rounded-t-2xl sm:rounded-2xl shadow-2xl
+             h-[88vh] supports-[height:100dvh]:h-[88dvh]
+             flex flex-col overflow-hidden"
+>
+
+                      
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
                         border-b border-gray-200/60 dark:border-white/10
@@ -699,7 +707,11 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-4 sm:py-5 space-y-5">
+        <div
+  className="flex-1 min-h-0 overflow-y-auto touch-pan-y overscroll-contain
+             px-5 sm:px-6 py-4 sm:py-5 space-y-5"
+>
+
           {/* Summary */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl p-3 sm:p-4 bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 border border-violet-100 dark:border-white/10">
