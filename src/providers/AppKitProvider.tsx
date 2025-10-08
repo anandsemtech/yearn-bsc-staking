@@ -6,8 +6,10 @@ import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { createAppKit } from "@reown/appkit/react";
 import type { AppKitNetwork } from "@reown/appkit/networks";
 import { bsc } from "@reown/appkit/networks";
+import { http } from "viem"; // <-- add this
 
 declare global {
+  // avoids duplicate AppKit init in HMR/dev
   var __APPKIT_CREATED__: boolean | undefined;
 }
 
@@ -20,22 +22,31 @@ if (!projectId) {
 
 const networks = [bsc] as [AppKitNetwork, ...AppKitNetwork[]];
 
+// Your RPC (use your own; this is a sane default)
+const bscRpc =
+  (import.meta.env.VITE_BSC_RPC_URL as string) ||
+  "https://bsc-dataseed1.bnbchain.org";
+
 const metadata = {
   name: "Yearn Staking — AppKit Starter",
   description: "Minimal connect → dashboard scaffold using Reown AppKit + Wagmi",
   url:
     (import.meta.env.VITE_PUBLIC_SITE_URL as string) ||
-    (typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"),
+    (typeof window !== "undefined"
+      ? window.location.origin
+      : "http://localhost:5173"),
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 
+// IMPORTANT: Force reads/writes to your BSC RPC (not WalletConnect RPC)
 const wagmiAdapter = new WagmiAdapter({
   projectId,
   networks,
   ssr: false,
-  // transports: {
-  //   [bsc.id]: http(import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org")
-  // }
+  transports: {
+    [bsc.id]: http(bscRpc),
+  },
+  // You can also set `storage` or `timeout` here if needed
 });
 
 const appKitTheme = {

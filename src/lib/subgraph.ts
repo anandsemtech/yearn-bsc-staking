@@ -1,6 +1,14 @@
 // src/lib/subgraph.ts
-// Minimal GraphQL client: token-bucket rate limit, backoff+failover, LRU cache, in-flight dedupe.
+// Minimal GraphQL client with:
+// - Endpoint failover (Studio → Gateway by id → Gateway by name)
+// - Token-bucket client-side rate limiting
+// - Exponential backoff + jitter (tuned to smooth surges)
+// - In-flight dedupe (same query+vars collapse to one request)
+// - Small LRU cache
 
+/* =========================
+   Endpoints (env-driven)
+========================= */
 const STUDIO_URL: string = (import.meta.env.VITE_SUBGRAPH_YEARN ?? "") as string;
 
 // Optional Graph Gateway (drop-in failover)
@@ -8,19 +16,21 @@ const GATEWAY_KEY  = import.meta.env.VITE_GRAPH_API_KEY as string | undefined;
 const GATEWAY_ID   = import.meta.env.VITE_GRAPH_SUBGRAPH_ID as string | undefined;
 const GATEWAY_NAME = import.meta.env.VITE_GRAPH_SUBGRAPH_NAME as string | undefined;
 
-const gatewayById   = (GATEWAY_KEY && GATEWAY_ID)
-  ? `https://gateway.thegraph.com/api/${GATEWAY_KEY}/subgraphs/id/${GATEWAY_ID}`
-  : undefined;
+const gatewayById =
+  GATEWAY_KEY && GATEWAY_ID
+    ? `https://gateway.thegraph.com/api/${GATEWAY_KEY}/subgraphs/id/${GATEWAY_ID}`
+    : undefined;
 
-const gatewayByName = (GATEWAY_KEY && GATEWAY_NAME)
-  ? `https://gateway.thegraph.com/api/${GATEWAY_KEY}/subgraphs/name/${GATEWAY_NAME}`
-  : undefined;
+const gatewayByName =
+  GATEWAY_KEY && GATEWAY_NAME
+    ? `https://gateway.thegraph.com/api/${GATEWAY_KEY}/subgraphs/name/${GATEWAY_NAME}`
+    : undefined;
 
-// Build endpoint list without any undefined/null types
+// Build endpoint list in priority order (Studio first; then Gateways)
 const ENDPOINTS: string[] = [];
-if (STUDIO_URL)     ENDPOINTS.push(STUDIO_URL);
-if (gatewayById)    ENDPOINTS.push(gatewayById);
-if (gatewayByName)  ENDPOINTS.push(gatewayByName);
+if (STUDIO_URL) ENDPOINTS.push(STUDIO_URL);
+if (gatewayById) ENDPOINTS.push(gatewayById);
+if (gatewayByName) ENDPOINTS.push(gatewayByName);
 
 let endpointIndex = 0;
 function currentUrl(): string | null {
@@ -28,46 +38,70 @@ function currentUrl(): string | null {
   return ENDPOINTS[endpointIndex % ENDPOINTS.length];
 }
 function nextEndpoint() {
-  if (ENDPOINTS.length > 1) endpointIndex = (endpointIndex + 1) % ENDPOINTS.length;
+  if (ENDPOINTS.length > 1) {
+    endpointIndex = (endpointIndex + 1) % ENDPOINTS.length;
+  }
 }
-
 function currentUrlStrict(): string {
   const u = currentUrl();
   if (!u) throw new Error("No subgraph endpoint configured. Set VITE_SUBGRAPH_YEARN.");
   return u;
 }
 
-// DX-only tag
+/* =========================
+   DX: gql tag (noop)
+========================= */
 export const gql = (strings: TemplateStringsArray, ...values: any[]) =>
   strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""), "");
 
-// Token bucket (avg 4 rps, burst 6)
+/* =========================
+   Token bucket (per tab)
+   ~4 rps average, burst 6
+========================= */
 const MAX_TOKENS = 6;
-const REFILL_PER_MS = 4 / 1000;
-let tokens = MAX_TOKENS, lastRefill = Date.now();
+const REFILL_PER_MS = 4 / 1000; // 4 tokens per second
+let tokens = MAX_TOKENS;
+let lastRefill = Date.now();
 function refill() {
   const now = Date.now();
   tokens = Math.min(MAX_TOKENS, tokens + (now - lastRefill) * REFILL_PER_MS);
   lastRefill = now;
 }
 async function takeToken() {
-  for (;;) { refill(); if (tokens >= 1) { tokens -= 1; return; } await new Promise(r => setTimeout(r, 60)); }
+  // simple wait loop; keeps code small and effective
+  for (;;) {
+    refill();
+    if (tokens >= 1) {
+      tokens -= 1;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 60));
+  }
 }
 
-// In-flight dedupe
+/* =========================
+   In-flight dedupe
+========================= */
 type Key = string;
 const inFlight = new Map<Key, Promise<any>>();
 
-// LRU cache
+/* =========================
+   Small LRU cache
+========================= */
 const CACHE_MAX = 250;
-const DEFAULT_TTL = 30_000;
+const DEFAULT_TTL = 30_000; // 30s
 const cache = new Map<Key, { ts: number; ttl: number; data: any }>();
+
 function lruGet(key: Key) {
   const hit = cache.get(key);
   if (!hit) return null;
-  if (Date.now() - hit.ts > hit.ttl) { cache.delete(key); return null; }
+  if (Date.now() - hit.ts > hit.ttl) {
+    cache.delete(key);
+    return null;
+  }
   // refresh LRU order
-  cache.delete(key); cache.set(key, hit);
+  cache.delete(key);
+  cache.set(key, hit);
   return hit.data;
 }
 function lruSet(key: Key, data: any, ttl: number) {
@@ -80,13 +114,31 @@ function lruSet(key: Key, data: any, ttl: number) {
   }
 }
 
+/* =========================
+   Errors
+========================= */
+class HttpError extends Error {
+  status: number;
+  body?: string;
+  constructor(status: number, body?: string) {
+    super(`HTTP ${status}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+class GraphQLError extends Error {
+  errors: unknown;
+  constructor(errors: unknown) {
+    super("GraphQL Error");
+    this.errors = errors;
+  }
+}
 
-// Errors
-class HttpError extends Error { status: number; body?: string; constructor(status: number, body?: string) { super(`HTTP ${status}`); this.status = status; this.body = body; } }
-class GraphQLError extends Error { errors: unknown; constructor(errors: unknown) { super("GraphQL Error"); this.errors = errors; } }
-
+/* =========================
+   Helpers
+========================= */
 function stable(obj: any) {
-  return JSON.stringify(obj, (_, v) => (typeof v === "bigint" ? v.toString() : v));
+  return JSON.stringify(obj, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
 }
 
 async function doFetch<T>(url: string, query: string, variables?: Record<string, any>): Promise<T> {
@@ -95,61 +147,87 @@ async function doFetch<T>(url: string, query: string, variables?: Record<string,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
   });
-  if (!res.ok) throw new HttpError(res.status, await res.text().catch(() => undefined));
+  if (!res.ok) {
+    throw new HttpError(res.status, await res.text().catch(() => undefined));
+  }
   const json = await res.json();
   if (json?.errors) throw new GraphQLError(json.errors);
   return json.data as T;
 }
 
+/**
+ * Exponential backoff with jitter and endpoint failover.
+ * Tuned a bit slower to smooth synchronized bursts (e.g., many users refreshing).
+ */
 async function withBackoff<T>(fn: () => Promise<T>, tries = 5): Promise<T> {
   let lastErr: any;
   for (let i = 0; i < tries; i++) {
-    try { return await fn(); } catch (err: any) {
+    try {
+      return await fn();
+    } catch (err: any) {
       lastErr = err;
       const status = err?.status ?? 0;
       const transient = status === 429 || (status >= 500 && status < 600);
+
+      // If not transient (e.g., 400/403), don’t loop.
       if (!transient) break;
+
+      // Rotate endpoint to spread load when possible.
       nextEndpoint();
-      const base = 400 * (2 ** i), jitter = Math.floor(Math.random() * 200);
-      await new Promise(r => setTimeout(r, base + jitter));
+
+      // Backoff: base 700ms * 2^i + jitter (0..200ms)
+      const base = 700 * 2 ** i;
+      const jitter = Math.floor(Math.random() * 200);
+      await new Promise((r) => setTimeout(r, base + jitter));
     }
   }
   throw lastErr;
 }
 
-/** Public API */
+/* =========================
+   Public API
+========================= */
 export async function subgraphRequest<T = any>(
   query: string,
   variables?: Record<string, any>,
   ttlMs = DEFAULT_TTL
 ): Promise<T> {
-  // use a definite string for the cache key
   const endpointForKey = currentUrlStrict();
   const key = `${endpointForKey}|${query}|${stable(variables ?? {})}`;
 
+  // Local LRU
   if (ttlMs > 0) {
     const hit = lruGet(key);
     if (hit) return hit as T;
   }
 
+  // In-flight dedupe
   const existing = inFlight.get(key);
   if (existing) return existing as Promise<T>;
 
   const p = (async () => {
     await takeToken();
-    // IMPORTANT: call currentUrlStrict() INSIDE the retry closure so failover works
-    const res = await withBackoff<T>(() => doFetch<T>(currentUrlStrict(), query, variables));
+    // Call currentUrlStrict() inside retry to honor failover.
+    const res = await withBackoff<T>(() =>
+      doFetch<T>(currentUrlStrict(), query, variables)
+    );
     if (ttlMs > 0) lruSet(key, res, ttlMs);
     return res;
   })();
 
   inFlight.set(key, p);
-  try { return await p; } finally { inFlight.delete(key); }
+  try {
+    return await p;
+  } finally {
+    inFlight.delete(key);
+  }
 }
-
 
 // Compatibility shim
 export const subgraph = {
   request: <T = any>(query: string, variables?: Record<string, any>) =>
     subgraphRequest<T>(query, variables),
 };
+
+// Re-exports for consumers (optional)
+export type { HttpError, GraphQLError };
