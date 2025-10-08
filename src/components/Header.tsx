@@ -14,11 +14,10 @@ import { Address, formatUnits } from "viem";
 import { bsc } from "viem/chains";
 import { useAppKit } from "@reown/appkit/react";
 import { useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 
 import UserSettingsModal from "./UserSettingsModal";
 import YearnTogetherMark from "./YearnTogetherMark";
-import { motion, AnimatePresence } from "framer-motion";
-
 
 /* ENV token addresses (optional) */
 const YYEARN = (import.meta.env.VITE_YYEARN_ADDRESS ?? "") as Address;
@@ -75,7 +74,6 @@ const Row: React.FC<{ symbol: string; value: string }> = ({ symbol, value }) => 
 );
 
 /* Balances popover / sheet */
-
 const BalancesPopover: React.FC<{
   anchorRef: React.RefObject<HTMLButtonElement>;
   open: boolean;
@@ -85,7 +83,7 @@ const BalancesPopover: React.FC<{
 }> = ({ anchorRef, open, onClose, rows, native }) => {
   const popRef = useRef<HTMLDivElement>(null);
 
-  // Close when clicking outside (desktop)
+  // Close on outside/ESC (desktop)
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -103,7 +101,7 @@ const BalancesPopover: React.FC<{
     };
   }, [open, onClose, anchorRef]);
 
-  // Lock page scroll when the mobile sheet is open
+  // Lock page scroll while the mobile sheet is open
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -115,86 +113,83 @@ const BalancesPopover: React.FC<{
 
   if (!open) return null;
 
-  return (
-    <>
-      {/* ---------- Desktop popover (unchanged) ---------- */}
-      <div
-        ref={popRef}
-        className="hidden md:block absolute z-[70] mt-2 w-[360px] right-0 rounded-2xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl p-4"
-        style={{ top: (anchorRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY }}
+  // Desktop anchored popover (inline)
+  const desktop = (
+    <div
+      ref={popRef}
+      className="hidden md:block absolute z-[70] mt-2 w-[360px] right-0 rounded-2xl border border-white/10 bg-gray-900/95 backdrop-blur shadow-xl p-4"
+      style={{ top: (anchorRef.current?.getBoundingClientRect().bottom ?? 0) + window.scrollY }}
+    >
+      <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
+      <div className="space-y-2">
+        <Row symbol={native.symbol} value={native.value} />
+        {rows.map((r) => (
+          <Row key={r.symbol} symbol={r.symbol} value={r.value} />
+        ))}
+      </div>
+    </div>
+  );
+
+  // Mobile bottom sheet (portal to <body>)
+  const mobile = (
+    <AnimatePresence>
+      {/* Backdrop */}
+      <motion.div
+        key="bal-bd"
+        className="md:hidden fixed inset-0 z-[999] bg-black/60"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        style={{ height: "100dvh" }}
+      />
+      {/* Sheet */}
+      <motion.div
+        key="bal-sheet"
+        className="
+          md:hidden fixed inset-x-0 bottom-0 z-[1000]
+          rounded-t-[28px] border-t border-white/10
+          bg-[#1c1f27] text-white
+          shadow-[0_-20px_40px_rgba(0,0,0,0.35)]
+          backdrop-blur
+          flex flex-col overflow-hidden
+        "
+        initial={{ y: "100%" }}
+        animate={{ y: 0 }}
+        exit={{ y: "100%" }}
+        transition={{ type: "spring", stiffness: 380, damping: 32 }}
+        style={{
+          paddingTop: "max(env(safe-area-inset-top, 0px), 12px)",
+          paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
+          maxHeight: "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
+        }}
       >
-        <div className="mb-3 text-xs uppercase tracking-wide text-white/60">Balances</div>
-        <div className="space-y-2">
+        <div className="px-5 pt-2">
+          <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/20" />
+          <div className="mb-2 text-[11px] uppercase tracking-wide text-white/60">Balances</div>
+        </div>
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-2 space-y-2">
           <Row symbol={native.symbol} value={native.value} />
           {rows.map((r) => (
             <Row key={r.symbol} symbol={r.symbol} value={r.value} />
           ))}
         </div>
-      </div>
+        <div className="px-5 pb-2">
+          <button
+            onClick={onClose}
+            className="w-full rounded-2xl bg-white/10 hover:bg-white/15 text-white py-2 text-sm"
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
 
-      {/* ---------- Mobile bottom sheet (AppKit-like) ---------- */}
-      <AnimatePresence>
-        {/* Backdrop */}
-        <motion.div
-          key="backdrop"
-          className="md:hidden fixed inset-0 z-[60] bg-black/60"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          style={{ height: "100dvh" }}
-        />
-
-        {/* Sheet */}
-        <motion.div
-          key="sheet"
-          className="
-            md:hidden fixed inset-x-0 bottom-0 z-[70]
-            rounded-t-[28px] border-t border-white/10
-            bg-[#1c1f27] text-white
-            shadow-[0_-20px_40px_rgba(0,0,0,0.35)]
-            backdrop-blur
-            flex flex-col overflow-hidden
-          "
-          initial={{ y: "100%" }}
-          animate={{ y: 0 }}
-          exit={{ y: "100%" }}
-          transition={{ type: "spring", stiffness: 380, damping: 32 }}
-          style={{
-            // safe areas + height that won’t get cropped by URL bar
-            paddingTop: "max(env(safe-area-inset-top, 0px), 12px)",
-            paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-            maxHeight:
-              "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
-          }}
-        >
-          {/* Grab handle + header */}
-          <div className="px-5 pt-2">
-            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/20" />
-            <div className="mb-2 text-[11px] uppercase tracking-wide text-white/60">
-              Balances
-            </div>
-          </div>
-
-          {/* Scrollable content */}
-          <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-2 space-y-2">
-            <Row symbol={native.symbol} value={native.value} />
-            {rows.map((r) => (
-              <Row key={r.symbol} symbol={r.symbol} value={r.value} />
-            ))}
-          </div>
-
-          {/* Sticky footer */}
-          <div className="px-5 pb-2">
-            <button
-              onClick={onClose}
-              className="w-full rounded-2xl bg-white/10 hover:bg-white/15 text-white py-2 text-sm"
-            >
-              Close
-            </button>
-          </div>
-        </motion.div>
-      </AnimatePresence>
+  return (
+    <>
+      {desktop}
+      {createPortal(mobile, document.body)}
     </>
   );
 };
@@ -229,7 +224,6 @@ const Header: React.FC = () => {
 
   const openAppKit = () => open();
 
-  
   const handleDisconnect = async () => {
     try {
       await disconnectAsync();
@@ -267,7 +261,7 @@ const Header: React.FC = () => {
     }
   }
 
-  /* Native balance (no `watch` in this wagmi version) */
+  /* Native balance */
   const { data: nativeBal } = useBalance({
     address,
     query: { enabled: Boolean(address) },
