@@ -67,3 +67,21 @@
     @apply mt-2 inline-block rounded-lg border border-white/10 bg-black/60 px-3 py-2 font-mono text-sm text-gray-200;
   }
 }
+
+@layer utilities {
+  /* Use the dynamic viewport height (prevents cropping under URL bar) */
+  .h-dvh { height: 100dvh; }
+
+  /* Safe-area paddings for iOS/Android */
+  .safe-pt { padding-top: max(env(safe-area-inset-top, 0px), 8px); }
+  .safe-pb { padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px); }
+
+  /* Max height for bottom sheets with dvh + safe-area */
+  .max-h-dvh-safe {
+    max-height: min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px));
+  }
+
+  /* Scroll behavior inside sheets */
+  .sheet-scroll { overflow-y: auto; overscroll-behavior: contain; }
+}
+
