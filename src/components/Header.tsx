@@ -1,6 +1,7 @@
 // src/components/Header.tsx
 import { Settings, Menu, X, Zap, Copy, Wallet } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   useAccount,
   useDisconnect,
