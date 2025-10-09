@@ -7,10 +7,14 @@ import type { Address } from "viem";
 import PackageCards, { PackageData } from "@/components/PackageCards";
 import StakingModal from "@/components/StakingModal";
 import ActivePackages from "@/components/ActivePackages";
-import ReferralShareSheet from "@/components/ReferralShareSheet";
+
 import { useActiveStakes } from "@/hooks/useActiveStakes";
 import { useHonoraryNft } from "@/hooks/useHonoraryNft";
 import HonoraryNftPopup from "@/components/HonoraryNftPopup";
+
+import ReferralSummaryCard from "@/components/ReferralSummaryCard";
+import AppKitSheet from "@/components/ui/AppKitSheet";
+import ReferralTabsSheetContent from "@/components/ReferralTabsSheetContent";
 
 /* === EXACT preferred badge contracts from env === */
 const YEARNCHAMPNFT = (import.meta.env.VITE_YEARNCHAMPNFT ||
@@ -95,6 +99,9 @@ export default function Dashboard() {
     [badges]
   );
 
+  const [openRefSheet, setOpenRefSheet] = useState(false);
+
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Badges popup (unchanged) */}
@@ -108,12 +115,28 @@ export default function Dashboard() {
       )}
 
       {/* 🔐 Render the Referrals panel ONLY when the user actually owns Champ or Buddy */}
-      
+
       {!badgesLoading && hasPreferred && (
-        <GlassPanel title="Referrals" className="mt-8">
-          <ReferralShareSheet hasPreferredBadge={true} useBottomSheet={true} />
-        </GlassPanel>
-      )}
+      <GlassPanel title="Referrals" className="mt-8">
+        <ReferralSummaryCard
+          hasPreferredBadge
+          onOpenAllLevels={() => setOpenRefSheet(true)}
+          placeholders={{ referral: "—", star: "—", golden: "—" }}
+        />
+        <AppKitSheet open={openRefSheet} onOpenChange={setOpenRefSheet} zIndex={2100} maxHeightVh={85}>
+          <ReferralTabsSheetContent
+            hasPreferredBadge
+            shareLink={`${window.location.origin}/ref/${address ?? ""}`}
+            tiles={{
+              staked: "—",             // fmt(myTotalYY, decimals.yy) if you want to pass it down
+              referral: "—",
+              star: "—",
+              golden: "—",
+            }}
+          />
+        </AppKitSheet>
+      </GlassPanel>
+    )}
 
 
       <GlassPanel title="Available Packages" className="mt-8">
