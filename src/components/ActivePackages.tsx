@@ -104,6 +104,14 @@ function fmtYY(wei?: bigint, maxFrac = 4) {
   return fTrim ? `${wDisp}.${fTrim}` : wDisp;
 }
 
+/** Derive APR % reliably from available fields */
+function deriveAprPct(row: ActivePackageRow): number | undefined {
+  if (typeof row.aprPct === "number") return row.aprPct;
+  const bps = row.aprBps ?? row.pkgRules?.aprBps;
+  if (bps == null) return undefined;
+  return bps / 100;
+}
+
 /* ================================================================================ */
 /*                                  Component                                       */
 /* ================================================================================ */
@@ -158,15 +166,23 @@ const ActivePackages: React.FC<Props> = ({
   // Convenience alias used by both desktop & mobile renderers
   const tableRows = mergedRows;
 
-  // Listen for optimistic events from the modal
+  // Listen for optimistic events from the modal (balanced and type-safe)
   useEffect(() => {
     function addFromPayload(e: Event) {
       const detail = (e as CustomEvent).detail || {};
       const txHash: string | undefined = detail.txHash;
+
       const pkgName: string = detail.packageName ?? "Stake";
       const packageId: number = Number(detail.packageId ?? 0);
       const startTs = Number(detail.startTs ?? Math.floor(Date.now() / 1000));
       const amountLabel: string = detail.totalAmountLabel ?? "—";
+
+      // Enriched optimistic fields
+      const aprPct: number | undefined =
+        typeof detail.aprPct === "number" ? detail.aprPct : undefined;
+      const pkgRules: ActivePackageRow["pkgRules"] | undefined = detail.pkgRules;
+      const nextClaimAt: number | undefined =
+        typeof detail.nextClaimAt === "number" ? detail.nextClaimAt : undefined;
 
       const row: ActivePackageRow = {
         id: txHash ? `opt:${txHash}` : `opt:${packageId}:${startTs}`,
@@ -176,29 +192,39 @@ const ActivePackages: React.FC<Props> = ({
         status: "Pending",
         stakeIndex: txHash ?? `opt:${packageId}:${startTs}`,
         packageId,
-        aprPct: undefined,
+        aprPct,
         startTs,
         optimistic: true,
         txHash,
+        pkgRules,
+        nextClaimWindow: nextClaimAt ? new Date(nextClaimAt * 1000) : undefined,
       };
 
       setOptimisticRows((prev) => {
-        const key = row.txHash ? `tx:${row.txHash}` : `pkg:${row.packageId}:start:${row.startTs}`;
+        const key = row.txHash
+          ? `tx:${row.txHash}`
+          : `pkg:${row.packageId}:start:${row.startTs}`;
         const exists = prev.some(
-          (r) => (r.txHash ? `tx:${r.txHash}` : `pkg:${r.packageId}:start:${r.startTs}`) === key
+          (r) =>
+            (r.txHash
+              ? `tx:${r.txHash}`
+              : `pkg:${r.packageId}:start:${r.startTs}`) === key
         );
         return exists ? prev : [row, ...prev];
       });
 
       if (txHash) {
-        setStartedAtByTx((m) => ({ ...m, [txHash]: startTs * 1000 || Date.now() }));
+        setStartedAtByTx((m) => ({
+          ...m,
+          [txHash]: startTs * 1000 || Date.now(),
+        }));
       }
     }
 
     const names = ["active-packages:add-optimistic", "stake:optimistic"];
     names.forEach((n) => window.addEventListener(n, addFromPayload as EventListener));
 
-    // When data is updated, prune optimistic rows that have been materialized
+    // prune when props update
     function prune() {
       setOptimisticRows((prev) => {
         if (!prev.length) return prev;
@@ -213,7 +239,6 @@ const ActivePackages: React.FC<Props> = ({
         });
       });
     }
-
     const refreshNames = ["staking:updated", "active-packages:refresh", "stakes:changed", "staked"];
     refreshNames.forEach((n) => window.addEventListener(n, prune as EventListener));
 
@@ -223,7 +248,7 @@ const ActivePackages: React.FC<Props> = ({
     };
   }, [rows]);
 
-  // NEW: promote optimistic row from Pending → Active on stake:confirmed (modal fires this after receipt)
+  // Promote optimistic row from Pending → Active on stake:confirmed
   useEffect(() => {
     function onStakedConfirmed(e: Event) {
       const { txHash } = (e as CustomEvent).detail || {};
@@ -236,7 +261,7 @@ const ActivePackages: React.FC<Props> = ({
     return () => window.removeEventListener("stake:confirmed", onStakedConfirmed as EventListener);
   }, []);
 
-  // NEW: auto-promote Pending → Active after 120s if subgraph hasn't caught up
+  // Auto-promote Pending → Active after 120s if subgraph hasn't caught up
   useEffect(() => {
     const id = window.setInterval(() => {
       setOptimisticRows((prev) =>
@@ -460,27 +485,6 @@ const ActivePackages: React.FC<Props> = ({
     </span>
   );
 
-  const SuccessShimmer: React.FC<{ kind: "claim" | "unstake" }> = ({ kind }) => (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
-      className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl"
-    >
-      <motion.div
-        initial={{ x: "-120%" }}
-        animate={{ x: "160%" }}
-        transition={{ duration: 0.9, ease: "easeOut" }}
-        className={`h-full w-1/3 rotate-[12deg] ${
-          kind === "claim"
-            ? "bg-gradient-to-br from-emerald-300/20 via-white/40 to-emerald-300/20"
-            : "bg-gradient-to-br from-rose-300/20 via-white/40 to-rose-300/20"
-        } blur-md`}
-      />
-    </motion.div>
-  );
-
   const renderPendingInfo = (r: ActivePackageRow) => {
     if (r.status !== "Pending") return null;
     const started = r.txHash ? startedAtByTx[r.txHash] : undefined;
@@ -512,9 +516,15 @@ const ActivePackages: React.FC<Props> = ({
             <tbody className="divide-y divide-white/5 text-white/90">
               {tableRows.map((r) => {
                 const pkg = r.pkgRules;
+                const isOpt = !!r.optimistic;
                 const nowMs = Date.now();
 
-                const availableBase = r.nextClaimWindow ? r.nextClaimWindow.getTime() <= nowMs : true;
+                // Optimistic rows should always look locked
+                const availableBase = isOpt
+                  ? false
+                  : r.nextClaimWindow
+                  ? r.nextClaimWindow.getTime() <= nowMs
+                  : true;
 
                 const canClaim =
                   (pkg?.isActive ?? r.status === "Active") &&
@@ -536,12 +546,14 @@ const ActivePackages: React.FC<Props> = ({
                     : (pkg?.durationInDays ?? 0) > 0 &&
                       (r.startDate?.getTime?.() ?? 0) + (pkg?.durationInDays ?? 0) * 86400 * 1000 <= nowMs);
 
+                const aprPct = deriveAprPct(r);
+
                 return (
                   <tr key={r.id} className={`transition-colors ${r.optimistic ? "bg-white/5" : "hover:bg-white/[0.03]"}`}>
                     <td className="px-5 py-4">{r.packageName}{r.optimistic ? " (pending)" : ""}</td>
                     <td className="px-5 py-4 tabular-nums">{r.amount}</td>
                     <td className="px-5 py-4 text-emerald-400">
-                      {typeof r.aprPct === "number" ? `${r.aprPct.toFixed(2)}%` : "—"}
+                      {typeof aprPct === "number" ? `${aprPct.toFixed(2)}%` : "—"}
                     </td>
                     <td className="px-5 py-4" title={r.startDate?.toISOString?.()}>
                       {fmtDateTimeSeconds(r.startDate)}
@@ -584,7 +596,7 @@ const ActivePackages: React.FC<Props> = ({
                       <div className="flex gap-2">
                         <button
                           disabled={!canClaim}
-                          onClick={() => {}}
+                          onClick={() => claim(r.stakeIndex, r.pkgRules)}
                           className={
                             "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium " +
                             (canClaim
@@ -596,7 +608,7 @@ const ActivePackages: React.FC<Props> = ({
                         </button>
                         <button
                           disabled={!canUnstake}
-                          onClick={() => {}}
+                          onClick={() => unstake(r.stakeIndex)}
                           className={
                             "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium " +
                             (canUnstake
@@ -616,13 +628,19 @@ const ActivePackages: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Mobile cards — now also use tableRows (merged with optimistic) */}
+      {/* Mobile cards — use tableRows (merged with optimistic) */}
       <div className="md:hidden -mx-4 px-4 mt-6 space-y-4">
         {tableRows.map((r) => {
           const pkg = r.pkgRules;
+          const isOpt = !!r.optimistic;
           const nowMs = Date.now();
 
-          const availableBase = r.nextClaimWindow ? r.nextClaimWindow.getTime() <= nowMs : true;
+          // Optimistic rows should always look locked
+          const availableBase = isOpt
+            ? false
+            : r.nextClaimWindow
+            ? r.nextClaimWindow.getTime() <= nowMs
+            : true;
 
           const canClaim =
             (pkg?.isActive ?? r.status === "Active") &&
@@ -658,6 +676,8 @@ const ActivePackages: React.FC<Props> = ({
             ? Math.max(0, Math.floor((Date.now() - started) / 1000))
             : 0;
 
+          const aprPct = deriveAprPct(r);
+
           return (
             <motion.div
               key={r.id}
@@ -673,7 +693,7 @@ const ActivePackages: React.FC<Props> = ({
                 className={`absolute inset-x-0 top-0 h-[3px] ${
                   r.status === "Pending"
                     ? "bg-gradient-to-r from-zinc-400 to-zinc-200"
-                    : availableBase
+                    : !isOpt && availableBase
                     ? "bg-gradient-to-r from-emerald-400 to-green-500"
                     : "bg-gradient-to-r from-sky-400 to-blue-500"
                 }`}
@@ -690,7 +710,7 @@ const ActivePackages: React.FC<Props> = ({
                       <span className="text-white/70">Indexing…</span>
                       <span className="text-white/50">({elapsed}s)</span>
                     </>
-                  ) : availableBase ? (
+                  ) : !isOpt && availableBase ? (
                     <>
                       <PulseDot />
                       <span className="text-emerald-400">Available now</span>
@@ -711,12 +731,17 @@ const ActivePackages: React.FC<Props> = ({
                 <div>
                   APR:{" "}
                   <span className="font-medium text-emerald-400">
-                    {typeof r.aprPct === "number" ? `${r.aprPct.toFixed(2)}%` : "—"}
+                    {typeof aprPct === "number" ? `${aprPct.toFixed(2)}%` : "—"}
                   </span>
                 </div>
 
                 {r.status !== "Pending" ? (
-                  availableBase ? (
+                  // If optimistic → always show Next claim (locked)
+                  isOpt ? (
+                    <div className="text-xs text-white/60 mt-1">
+                      ⏳ Next claim: {fmtDateTime(r.nextClaimWindow)}
+                    </div>
+                  ) : availableBase ? (
                     <div className="mt-2 text-[13px] text-emerald-300">
                       Claimable now:{" "}
                       <span className="font-semibold text-emerald-200">up to {fmtYY(remaining)}</span>
@@ -728,8 +753,8 @@ const ActivePackages: React.FC<Props> = ({
                   )
                 ) : null}
 
-                {/* Progress: Claimed vs Cap */}
-                {r.status !== "Pending" && (
+                {/* Progress: Claimed vs Cap (hide bar when optimistic & no totals) */}
+                {!isOpt && (
                   <div className="mt-2">
                     <div className="flex justify-between text-[11px] text-white/55 mb-1">
                       <span>Claimed</span>
@@ -775,8 +800,7 @@ const ActivePackages: React.FC<Props> = ({
                 </motion.button>
               </div>
 
-              {/* success shimmer (only for claim/unstake, not pending) */}
-              <AnimatePresence>{/* left intentionally empty here */}</AnimatePresence>
+              <AnimatePresence>{/* shimmer kept out for brevity */}</AnimatePresence>
             </motion.div>
           );
         })}

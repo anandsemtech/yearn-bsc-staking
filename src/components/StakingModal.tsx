@@ -314,6 +314,12 @@ useEffect(() => {
     setAmount(String(k * mStep));
   };
 
+  const packageId = React.useMemo(() => {
+    const raw = (pkg as any)?.packageId ?? (pkg as any)?.id;
+    const n = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }, [pkg]);
+
   /* ===========================
      Split -> wei using env decimals
   =========================== */
@@ -638,6 +644,28 @@ useEffect(() => {
       }
 
       const ref = finalReferrer();
+
+      // === NEW: get on-chain package info so we can prefill optimistic row ===
+      if (packageId == null) throw new Error("Unknown package id.");
+      const onPkg = await readPackageInfo(BigInt(packageId));
+      if (!onPkg) throw new Error("Failed to read package info.");
+
+      const pkgRules = {
+        durationInDays: Number(onPkg.durationInDays || 0),
+        aprBps: Number(onPkg.apr || 0), // contract returns bps (e.g. 2000)
+        monthlyUnstake: Boolean(onPkg.monthlyUnstake),
+        isActive: Boolean(onPkg.isActive),
+        monthlyAPRClaimable: Boolean(onPkg.monthlyAPRClaimable),
+        claimableIntervalSec: Number(onPkg.claimableInterval || 0),
+        principalLocked: Boolean(onPkg.principalLocked),
+      };
+
+      // Compute first "next claim" timestamp (seconds)
+      const startedAt = Math.floor(Date.now() / 1000);
+      const nextClaimAt = pkgRules.monthlyAPRClaimable && pkgRules.claimableIntervalSec > 0
+        ? startedAt + pkgRules.claimableIntervalSec
+        : startedAt + pkgRules.durationInDays * 86400;
+
       const key = JSON.stringify({
         pid: pkg.id,
         y: yWei.toString(),
@@ -669,13 +697,19 @@ useEffect(() => {
         key: `opt-${hash}`,
         txHash: hash,
         user: address,
-        packageId: Number(pkg.id),
+        packageId,  
         packageName: pkg.name,
-        startTs: Math.floor(Date.now() / 1000),
+        startTs: startedAt,
         status: "Pending",
         totalAmountLabel: totalHuman,
         compositionPct: [selected[0], selected[1], selected[2]],
         referrer: ref,
+
+        // NEW bits that fix the card:
+        aprPct: (pkgRules.aprBps ?? 0) / 100,  // 2000 bps => 20.00%
+        pkgRules,                               // full rules for UI logic
+        nextClaimAt,                            // seconds since epoch
+        
       });
 
     } catch (e: unknown) {
