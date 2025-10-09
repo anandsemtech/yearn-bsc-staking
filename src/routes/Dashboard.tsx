@@ -16,6 +16,7 @@ import ReferralSection from "@/components/ReferralSection";
 import ReferralSummaryCard from "@/components/ReferralSummaryCard";
 import AppKitSheet from "@/components/ui/AppKitSheet";
 import ReferralTabsSheetContent from "@/components/ReferralTabsSheetContent";
+import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
 
 
 /* === EXACT preferred badge contracts from env === */
@@ -102,6 +103,8 @@ export default function Dashboard() {
   );
 
   const [openRefSheet, setOpenRefSheet] = useState(false);
+  
+  const [openClaimsSheet, setOpenClaimsSheet] = useState(false);
 
 
   return (
@@ -119,10 +122,15 @@ export default function Dashboard() {
       {/* 🔐 Render the Referrals panel ONLY when the user actually owns Champ or Buddy */}
 
       {!badgesLoading && hasPreferred && (
-        <GlassPanel title="Referrals" className="mt-8">
-          <ReferralSection hasPreferredBadge placeholders={{ referral: "—", star: "—", golden: "—" }} />
+        <GlassPanel title="My Dashboad" className="mt-8">
+          <ReferralSection
+            hasPreferredBadge
+            placeholders={{ referral: "—", star: "—", golden: "—" }}
+            onOpenClaims={() => setOpenClaimsSheet(true)}   // <-- wire opener
+          />
         </GlassPanel>
       )}
+     
 
 
       <GlassPanel title="Available Packages" className="mt-8">

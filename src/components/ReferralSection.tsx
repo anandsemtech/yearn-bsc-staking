@@ -1,6 +1,6 @@
 // src/components/ReferralSection.tsx
-// Mobile: elegant AppKit-style bottom sheet with tabs (Level 1 / All Levels / Stats)
-// Desktop: inline, simple explorer (no sheet). Uses lib/subgraph via useReferralProfile.
+// Mobile: AppKit-style bottom sheets (Levels / My Claims)
+// Desktop: inline explorer (always open). Uses lib/subgraph via useReferralProfile.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -10,6 +10,8 @@ import {
   Users, Search, Filter, Link as LinkIcon, X, PieChart
 } from "lucide-react";
 import { useReferralProfile, fmt } from "@/hooks/useReferralProfile";
+
+import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
 
 /* ============================================================
    Constants
@@ -58,21 +60,27 @@ function computeFilteredIds(
 }
 
 /* ============================================================
-   AppKit-style Bottom Sheet (mobile-only)
+   AppKit-style Bottom Sheet
    - Auto grows with content (ResizeObserver) up to `maxVh` then scrolls
-   - Softer palette & larger controls for readability
 ============================================================ */
 function SheetPortal({
   open,
   onClose,
   title,
   children,
-  maxVh = 90, // cap at 90% dvh
-}: { open: boolean; onClose: () => void; title?: string; children: React.ReactNode; maxVh?: number }) {
+  maxVh = 90,            // cap at X% of viewport height
+  bottomGapPx = 28,      // extra breathing room at the bottom
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: string;
+  children: React.ReactNode;
+  maxVh?: number;
+  bottomGapPx?: number;
+}) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [pxHeight, setPxHeight] = useState<number | null>(null);
 
-  // Lock background scroll
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -80,28 +88,24 @@ function SheetPortal({
     return () => { document.body.style.overflow = prev; };
   }, [open]);
 
-  // Auto size to content
   useEffect(() => {
     if (!open || !bodyRef.current) return;
 
-    const headerPx = 64; // header height
-    const safeBottom = 16;
+    const headerPx = 64; // header height (grab bar + title)
     const compute = () => {
       const body = bodyRef.current!;
       const content = body.scrollHeight;
-      const desired = headerPx + content + safeBottom;
+      const desired = headerPx + content + bottomGapPx;
       const cap = Math.round((window.innerHeight || 0) * (maxVh / 100));
       setPxHeight(Math.min(desired, cap));
     };
 
     compute();
 
-    // ✅ optional-safe ResizeObserver
     const RO: any = (window as any).ResizeObserver;
     const ro = RO ? new RO(() => compute()) : null;
     if (ro && bodyRef.current) ro.observe(bodyRef.current);
 
-    // also recompute on viewport changes (keyboard, rotation)
     const onResize = () => compute();
     window.addEventListener("resize", onResize);
 
@@ -110,18 +114,14 @@ function SheetPortal({
       ro?.disconnect?.();
       window.removeEventListener("resize", onResize);
     };
-
-    
-  }, [open, maxVh]);
+  }, [open, maxVh, bottomGapPx]);
 
   if (!open) return null;
 
   return createPortal(
     <>
-      {/* Dim overlay */}
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2100]" onClick={onClose} />
 
-      {/* Sheet */}
       <div
         className="fixed inset-x-0 bottom-0 z-[2101] rounded-t-[24px] shadow-[0_-20px_60px_-10px_rgba(0,0,0,0.55)]
                    border-t border-white/10
@@ -143,16 +143,71 @@ function SheetPortal({
         </div>
         {title && <div className="px-5 pb-2 text-base font-semibold">{title}</div>}
 
-        {/* Body (becomes scrollable when we hit the cap) */}
+        {/* Body (scrolls when we hit the cap) */}
         <div
           ref={bodyRef}
-          className="px-5 pb-5 overflow-y-auto"
+          className="px-5 overflow-y-auto"
           style={{
             maxHeight: `calc(${maxVh}dvh - 64px - env(safe-area-inset-bottom, 0px))`,
-            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)",
+            paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${bottomGapPx}px)`,
           }}
         >
           {children}
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
+
+/* ============================================================
+   Desktop Modal (glass, centered) — for My Claims on web
+============================================================ */
+function DesktopModal({
+  open,
+  onClose,
+  title,
+  children,
+  maxW = "max-w-xl",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: string;
+  children: React.ReactNode;
+  maxW?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[2100] bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="fixed inset-0 z-[2101] flex items-center justify-center p-4">
+        <div
+          className={[
+            "w-full", maxW,
+            "rounded-2xl border border-white/10 bg-[rgba(18,22,36,0.9)] backdrop-blur-xl",
+            "shadow-[0_20px_80px_-20px_rgba(0,0,0,0.6)]"
+          ].join(" ")}
+        >
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+            <div className="text-sm font-semibold text-white">{title || "My Claims"}</div>
+            <button
+              onClick={onClose}
+              className="ml-auto px-2 py-1 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-4">
+            {children}
+          </div>
         </div>
       </div>
     </>,
@@ -167,12 +222,14 @@ type Props = {
   hasPreferredBadge: boolean; // if false, render nothing
   placeholders?: { referral?: string; star?: string; golden?: string };
   className?: string;
+  onOpenClaims?: () => void;
 };
 
 const ReferralSection: React.FC<Props> = ({
   hasPreferredBadge,
   placeholders = { referral: "—", star: "—", golden: "—" },
   className,
+  onOpenClaims,
 }) => {
   if (!hasPreferredBadge) return null;
 
@@ -193,10 +250,12 @@ const ReferralSection: React.FC<Props> = ({
 
   const L1 = levelMap.get(1) ?? { totalYY: 0n, rows: [] };
   const link = typeof window !== "undefined" ? `${window.location.origin}/ref/${address ?? ""}` : "";
-  const [copied, setCopied] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
 
-  // Shared explorer state (used by desktop inline + mobile sheet)
+  const [copied, setCopied] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
+  const [claimsOpen, setClaimsOpen] = useState(false);  // My Claims (responsive)
+
+  // Shared explorer state (desktop inline + mobile sheet)
   const [page, setPage] = useState(1);
   const [level, setLevel] = useState<number>(1);
   const [query, setQuery] = useState("");
@@ -235,22 +294,31 @@ const ReferralSection: React.FC<Props> = ({
             <h3 className="text-[17px] font-semibold text-white leading-tight">Referrals</h3>
             <p className="text-[12px] text-gray-300/90">Invite • Track 15 Levels • Share</p>
           </div>
+
+          {/* Actions */}
           <div className="ml-auto flex items-center gap-2">
+            {/* Refresh: icon-only on mobile, text on sm+ */}
             <button
               onClick={() => invalidate()}
-              className="rounded-xl px-3 py-2 text-[12px] text-gray-100 bg-white/10 hover:bg-white/15 inline-flex items-center gap-2"
+              aria-label="Refresh referrals"
+              title="Refresh"
+              className="rounded-xl px-2 py-2 sm:px-3 sm:py-2 text-[12px] text-gray-100 bg-white/10 hover:bg-white/15 inline-flex items-center gap-2"
             >
               <RefreshCw className="w-4 h-4" />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </button>
-            {isMobile && (
-              <button
-                onClick={() => setSheetOpen(true)}
-                className="rounded-xl px-3.5 py-2 text-[13px] font-semibold bg-gradient-to-r from-purple-500 to-blue-600 text-white shadow hover:opacity-95"
-              >
-                Open
-              </button>
-            )}
+
+            {/* My Claims */}
+            <button
+              onClick={() => {
+                setClaimsOpen(true);
+                if (isMobile) setSheetOpen(false);
+                onOpenClaims?.(); // optional: parent analytics
+              }}
+              className="rounded-xl px-3 py-2 text-[12px] font-semibold bg-emerald-600 hover:bg-emerald-500 text-white"
+            >
+              My Claims
+            </button>
           </div>
         </div>
 
@@ -287,9 +355,20 @@ const ReferralSection: React.FC<Props> = ({
             <Users className="w-5 h-5 text-blue-300" />
             <div className="text-[13px] font-semibold text-white">Level 1</div>
             <div className="text-[12px] text-gray-300/90">{loading ? "…" : `${L1.rows.length} referees`}</div>
-            <div className="ml-auto hidden sm:flex items-center gap-2 text-[12px] text-gray-300/90">
+
+            {/* right side: total + All Levels (only on mobile) */}
+            <div className="ml-auto flex items-center gap-2 text-[12px] text-gray-300/90">
               <span>Total YY</span>
               <span className="font-mono font-semibold text-emerald-300 text-[13px]">{loading ? "…" : fmt(L1.totalYY, decimals?.yy)}</span>
+              {isMobile && (
+                <button
+                  onClick={() => setSheetOpen(true)}
+                  className="rounded-lg px-2.5 py-1.5 text-[12px] font-semibold
+                             bg-gradient-to-r from-purple-500 to-blue-600 text-white shadow hover:opacity-95"
+                >
+                  All Levels
+                </button>
+              )}
             </div>
           </div>
 
@@ -311,159 +390,139 @@ const ReferralSection: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Desktop preview table */}
-            {!loading && L1.rows.length > 0 && (
-              <div className="hidden sm:block">
-                <div className="grid grid-cols-12 px-3 py-2 text-[12px] text-gray-300/90 bg-white/8 rounded-t-xl ring-1 ring-white/10">
-                  <div className="col-span-7">Address</div>
-                  <div className="col-span-2 text-right">Stakes</div>
-                  <div className="col-span-3 text-right">Total YY</div>
-                </div>
-                <div className="rounded-b-xl overflow-hidden divide-y divide-white/10">
-                  {L1.rows.slice(0, 8).map((r, i) => (
-                    <div key={`${r.addr}-${i}`} className="grid grid-cols-12 px-3 py-2 text-[12px]">
-                      <div className="col-span-7 font-mono text-gray-100 truncate">{r.addr}</div>
-                      <div className="col-span-2 text-right text-gray-100">{r.stakes}</div>
-                      <div className="col-span-3 text-right text-indigo-200">{fmt(r.totalYY, decimals?.yy)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Desktop-only: inline simple explorer */}
+            {/* Desktop: inline explorer — ALWAYS OPEN */}
             {!isMobile && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-[12px] font-semibold px-3 py-1.5 inline-block rounded-xl bg-white/8 hover:bg-white/12 text-white ring-1 ring-white/10 select-none">
-                  Explore all 15 levels
-                </summary>
+              <div className="mt-3 grid sm:grid-cols-[260px_1fr] gap-3">
+                {/* Level rail */}
+                <aside className="rounded-2xl ring-1 ring-white/10 bg-[#151b2b]/80 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[12px] font-semibold text-white">Levels</div>
+                    <label className="flex items-center gap-1 text-[12px] text-gray-300/90 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="accent-indigo-500"
+                        checked={onlyNonEmpty}
+                        onChange={(e) => {
+                          const v = e.target.checked;
+                          setOnlyNonEmpty(v);
+                          if (v && !(levelMap.get(level)?.rows?.length ?? 0)) {
+                            const first = computeFilteredIds(levelMap, v)[0];
+                            if (first) { setLevel(first); setPage(1); }
+                          }
+                        }}
+                      />
+                      <Filter className="w-4 h-4" />
+                      Non-empty
+                    </label>
+                  </div>
 
-                <div className="mt-3 grid sm:grid-cols-[260px_1fr] gap-3">
-                  {/* Level rail */}
-                  <aside className="rounded-2xl ring-1 ring-white/10 bg-[#151b2b]/80 p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-[12px] font-semibold text-white">Levels</div>
-                      <label className="flex items-center gap-1 text-[12px] text-gray-300/90 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          className="accent-indigo-500"
-                          checked={onlyNonEmpty}
-                          onChange={(e) => {
-                            const v = e.target.checked;
-                            setOnlyNonEmpty(v);
-                            if (v && !(levelMap.get(level)?.rows?.length ?? 0)) {
-                              const first = computeFilteredIds(levelMap, v)[0];
-                              if (first) { setLevel(first); setPage(1); }
-                            }
-                          }}
-                        />
-                        <Filter className="w-4 h-4" />
-                        Non-empty
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-5 sm:block gap-1 max-h-[40vh] overflow-auto pr-1">
-                      {filteredIdsMain.map((lvl) => {
-                        const active = lvl === effectiveMain;
-                        const count = levelMap.get(lvl)?.rows?.length ?? 0;
-                        const sumYY = levelMap.get(lvl)?.totalYY ?? 0n;
-                        return (
-                          <button
-                            key={lvl}
-                            onClick={() => { setLevel(lvl); setPage(1); }}
-                            className={[
-                              "rounded-xl px-2.5 py-1.5 ring-1 text-[12px] w-full text-left",
-                              active
-                                ? "bg-gradient-to-r from-purple-600/70 to-blue-600/70 ring-white/20 text-white"
-                                : "bg-white/8 hover:bg-white/12 ring-white/10 text-gray-100",
-                            ].join(" ")}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-semibold">L{lvl}</span>
-                              <span className="text-[11px] text-gray-300">{count}</span>
-                            </div>
-                            <div className="mt-0.5 text-[11px] text-indigo-200">YY {fmt(sumYY, decimals?.yy)}</div>
-                          </button>
-                        );
-                      })}
-                      {filteredIdsMain.length === 0 && <div className="text-[12px] text-gray-400">No levels</div>}
-                    </div>
-                  </aside>
-
-                  {/* List */}
-                  <main className="rounded-2xl ring-1 ring-white/10 bg-[#13192a]/80">
-                    <div className="px-3 sm:px-4 py-3 border-b border-white/10 flex flex-wrap items-center gap-2">
-                      <div className="flex items-center gap-2 text-white">
-                        <Users className="w-5 h-5 text-blue-300" />
-                        <div className="text-[13px] font-semibold">Level {effectiveMain}</div>
-                        <div className="text-[12px] text-gray-300/90">{loading ? "…" : `${rowsMain.length} referees`}</div>
-                      </div>
-                      <div className="ml-auto flex items-center gap-2">
-                        <div className="hidden sm:flex items-center gap-2 text-[12px] text-gray-300/90">
-                          <span>Total YY</span>
-                          <span className="font-mono font-semibold text-emerald-300 text-[13px]">
-                            {loading ? "…" : fmt(totalYYMain, decimals?.yy)}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 rounded-xl bg-white/8 px-2.5 py-1.5 ring-1 ring-white/10">
-                          <Search className="w-4.5 h-4.5 text-gray-300/90" />
-                          <input
-                            value={query}
-                            onChange={(e) => { setQuery(e.target.value); setPage(1); }}
-                            placeholder="Search address…"
-                            className="bg-transparent outline-none text-[12px] text-gray-100 placeholder:text-gray-400 w-36 sm:w-60"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-3 space-y-2 max-h=[56vh] overflow-auto">
-                      {loading && <div className="text-[12px] text-gray-300/90">Loading…</div>}
-                      {!loading && visibleMain.length === 0 && (
-                        <div className="text-[12px] text-gray-300/90">
-                          {rowsMain.length === 0 ? "No referees at this level." : "No matches for your search."}
-                        </div>
-                      )}
-                      {!loading && visibleMain.map((r, i) => (
-                        <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
+                  <div className="grid grid-cols-5 sm:block gap-1 max-h-[40vh] overflow-auto pr-1">
+                    {filteredIdsMain.map((lvl) => {
+                      const active = lvl === effectiveMain;
+                      const count = levelMap.get(lvl)?.rows?.length ?? 0;
+                      const sumYY = levelMap.get(lvl)?.totalYY ?? 0n;
+                      return (
+                        <button
+                          key={lvl}
+                          onClick={() => { setLevel(lvl); setPage(1); }}
+                          className={[
+                            "rounded-xl px-2.5 py-1.5 ring-1 text-[12px] w-full text-left",
+                            active
+                              ? "bg-gradient-to-r from-purple-600/70 to-blue-600/70 ring-white/20 text-white"
+                              : "bg-white/8 hover:bg-white/12 ring-white/10 text-gray-100",
+                          ].join(" ")}
+                        >
                           <div className="flex items-center justify-between">
-                            <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
-                            <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                            <span className="font-semibold">L{lvl}</span>
+                            <span className="text-[11px] text-gray-300">{count}</span>
                           </div>
-                          <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
-                        </div>
-                      ))}
+                          <div className="mt-0.5 text-[11px] text-indigo-200">YY {fmt(sumYY, decimals?.yy)}</div>
+                        </button>
+                      );
+                    })}
+                    {filteredIdsMain.length === 0 && <div className="text-[12px] text-gray-400">No levels</div>}
+                  </div>
+                </aside>
 
-                      {!loading && rowsMain.length > PAGE_SIZE && (
-                        <div className="flex items-center justify-between px-1 mt-2">
-                          <button
-                            className="text-[12px] px-3 py-1.5 rounded-xl bg-white/8 text-gray-100 ring-1 ring-white/10 disabled:opacity-40"
-                            onClick={() => setPage((p) => Math.max(1, p - 1))}
-                            disabled={safePageMain <= 1}
-                          >
-                            Prev
-                          </button>
-                          <div className="text-[12px] text-gray-300/90">{safePageMain} / {totalPagesMain}</div>
-                          <button
-                            className="text-[12px] px-3 py-1.5 rounded-xl bg-white/8 text-gray-100 ring-1 ring-white/10 disabled:opacity-40"
-                            onClick={() => setPage((p) => Math.min(totalPagesMain, p + 1))}
-                            disabled={safePageMain >= totalPagesMain}
-                          >
-                            Next
-                          </button>
-                        </div>
-                      )}
+                {/* List */}
+                <main className="rounded-2xl ring-1 ring-white/10 bg-[#13192a]/80">
+                  <div className="px-3 sm:px-4 py-3 border-b border-white/10 flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-2 text-white">
+                      <Users className="w-5 h-5 text-blue-300" />
+                      <div className="text-[13px] font-semibold">Level {effectiveMain}</div>
+                      <div className="text-[12px] text-gray-300/90">{loading ? "…" : `${rowsMain.length} referees`}</div>
                     </div>
-                  </main>
-                </div>
-              </details>
+                    <div className="ml-auto flex items-center gap-2">
+                      <div className="hidden sm:flex items-center gap-2 text-[12px] text-gray-300/90">
+                        <span>Total YY</span>
+                        <span className="font-mono font-semibold text-emerald-300 text-[13px]">
+                          {loading ? "…" : fmt(totalYYMain, decimals?.yy)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-xl bg-white/8 px-2.5 py-1.5 ring-1 ring-white/10">
+                        <Search className="w-4.5 h-4.5 text-gray-300/90" />
+                        <input
+                          value={query}
+                          onChange={(e) => { setQuery(e.target.value); setPage(1); }}
+                          placeholder="Search address…"
+                          className="bg-transparent outline-none text-[12px] text-gray-100 placeholder:text-gray-400 w-36 sm:w-60"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-3 space-y-2 max-h-[56vh] overflow-auto">
+                    {loading && <div className="text-[12px] text-gray-300/90">Loading…</div>}
+                    {!loading && visibleMain.length === 0 && (
+                      <div className="text-[12px] text-gray-300/90">
+                        {rowsMain.length === 0 ? "No referees at this level." : "No matches for your search."}
+                      </div>
+                    )}
+                    {!loading && visibleMain.map((r, i) => (
+                      <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
+                          <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                        </div>
+                        <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
+                      </div>
+                    ))}
+
+                    {!loading && rowsMain.length > PAGE_SIZE && (
+                      <div className="flex items-center justify-between px-1 mt-2">
+                        <button
+                          className="text-[12px] px-3 py-1.5 rounded-xl bg-white/8 text-gray-100 ring-1 ring-white/10 disabled:opacity-40"
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          disabled={safePageMain <= 1}
+                        >
+                          Prev
+                        </button>
+                        <div className="text-[12px] text-gray-300/90">{safePageMain} / {totalPagesMain}</div>
+                        <button
+                          className="text-[12px] px-3 py-1.5 rounded-xl bg-white/8 text-gray-100 ring-1 ring-white/10 disabled:opacity-40"
+                          onClick={() => setPage((p) => Math.min(totalPagesMain, p + 1))}
+                          disabled={safePageMain >= totalPagesMain}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </main>
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Mobile bottom sheet (tabs) */}
-      <SheetPortal open={sheetOpen && isMobile} onClose={() => setSheetOpen(false)} title="Referrals">
+      {/* Referrals (Levels) bottom sheet — mobile ONLY */}
+      <SheetPortal
+        open={sheetOpen && isMobile}
+        onClose={() => setSheetOpen(false)}
+        title="Referrals"
+        maxVh={90}
+        bottomGapPx={28}
+      >
         <Tabs
           link={link}
           tiles={{
@@ -480,6 +539,29 @@ const ReferralSection: React.FC<Props> = ({
           onlyNonEmpty={onlyNonEmpty} setOnlyNonEmpty={setOnlyNonEmpty}
         />
       </SheetPortal>
+
+      {/* My Claims — bottom sheet on mobile, centered modal on desktop */}
+      {isMobile ? (
+        <SheetPortal
+          open={claimsOpen}
+          onClose={() => setClaimsOpen(false)}
+          title="My Claims"
+          maxVh={92}
+          bottomGapPx={32}
+        >
+          <ReferralClaimsSheetContent />
+        </SheetPortal>
+      ) : (
+        <DesktopModal
+          open={claimsOpen}
+          onClose={() => setClaimsOpen(false)}
+          title="My Claims"
+          maxW="max-w-xl"
+        >
+          <ReferralClaimsSheetContent />
+        </DesktopModal>
+      )}
+
     </>
   );
 };
