@@ -914,20 +914,22 @@ const StakingModal: React.FC<StakingModalProps> = ({
             </div>
           ) : null}
 
-          {/* Composition */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-                {preferred ? "Choose a composition" : "Composition"}
-              </h4>
-              <span className="text-xs text-gray-500 dark:text-gray-400">
-                {preferred ? (compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`) : "Locked"}
-              </span>
-            </div>
+          {/* Composition (only for preferred wallets) */}
+          {preferred && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                  Choose a composition
+                </h4>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`}
+                </span>
+              </div>
 
-            {preferred ? (
-              <div className="grid grid-template gap-2.5"
-                   style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}>
+              <div
+                className="grid grid-template gap-2.5"
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}
+              >
                 {validCompositions.map((c, i) => {
                   const active = i === selectedIdx;
                   return (
@@ -945,13 +947,9 @@ const StakingModal: React.FC<StakingModalProps> = ({
                   );
                 })}
               </div>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                <LockIcon className="w-4 h-4" />
-                <span>Fixed to [100, 0, 0] (yYearn only)</span>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
+
 
           {/* Allocation */}
           <div className="rounded-xl p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10">
