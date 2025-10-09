@@ -1,7 +1,8 @@
 // src/components/StakingModal.tsx
-// Robust staking modal with: referral UI+validation, env-driven token meta,
-// BEP-20-safe approvals (YY = EXACT amount, SY/PY = MAX), resilient optimistic refresh,
-// correct 4-arg stake(), multiples/min/balance guards, and bottom-sheet UX on mobile.
+// Robust staking modal with badge-gated “pro” controls.
+// - If hasPreferredBadge=false: hide referrer text box, lock composition to [100,0,0], and show only yYearn in allocation.
+// - BEP-20-safe approvals (YY = EXACT amount, SY/PY = MAX), resilient optimistic refresh,
+// - correct 4-arg stake(), multiples/min/balance guards, and bottom-sheet UX on mobile.
 
 import {
   X,
@@ -12,6 +13,7 @@ import {
   Plus,
   Check,
   AlertTriangle,
+  Lock as LockIcon,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Address, Hex } from "viem";
@@ -22,7 +24,6 @@ import {
   useWalletClient,
 } from "wagmi";
 import { useAllowedCompositionsFromSubgraph as useAllowedCompositions } from "@/hooks/useAllowedCompositionsSubgraph";
-
 import { STAKING_ABI } from "@/web3/abi/stakingAbi";
 import { bsc } from "viem/chains";
 import { createPublicClient, http } from "viem";
@@ -38,8 +39,6 @@ import {
 =========================== */
 const DBG = false;
 const log = (...a: any[]) => { if (DBG) console.log(...a); };
-const warn = (...a: any[]) => { if (DBG) console.warn(...a); };
-const err  = (...a: any[]) => { if (DBG) console.error(...a); };
 
 /* ===========================
    Tunables
@@ -57,7 +56,7 @@ const APPROVE_YY_MAX = false;
 =========================== */
 interface StakingModalProps {
   package: {
-    id: string;
+    id: string | number;
     name: string;
     apy: number;
     durationYears: number;
@@ -65,8 +64,13 @@ interface StakingModalProps {
     stakeMultiple?: number;
   };
   onClose: () => void;
-  // Optional extras used by Dashboard; safe to ignore if you don't need them here
+
+  /** If true, wallet has the preferred NFT badge and can use advanced features */
+  hasPreferredBadge?: boolean;
+
+  // Back-compat (if your Dashboard already passes this)
   hasAdvanced?: boolean;
+
   honoraryItems?: { title: string; imageUrl: string | null; address: `0x${string}` }[];
 }
 
@@ -129,16 +133,16 @@ const STAKING_READS_ABI = [
 /* ===========================
    Helpers
 =========================== */
-const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!d))/g, ",");
 const prettyFixed = (v: bigint, decimals: number, places = 2) => {
   const s = v.toString().padStart(decimals + 1, "0");
   const i = s.length - decimals;
   const whole = s.slice(0, i) || "0";
   let frac = s.slice(i);
-  if (places <= 0) return addCommas(whole);
+  if (places <= 0) return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   if (frac.length < places) frac = frac.padEnd(places, "0");
   else frac = frac.slice(0, places);
-  return `${addCommas(whole)}.${frac}`;
+  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
 };
 const prettyUSD = (n: number) =>
   n.toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -155,7 +159,7 @@ function emitRefreshBursts(payload?: any) {
     window.dispatchEvent(new Event("active-packages:refresh"));
     window.dispatchEvent(new Event("stakes:changed"));
     window.dispatchEvent(new Event("staking:updated"));
-    window.dispatchEvent(new Event("staked")); // some listeners use this
+    window.dispatchEvent(new Event("staked"));
   };
   fire();
   setTimeout(fire, 1000);
@@ -175,7 +179,14 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
 /* ===========================
    Component
 =========================== */
-const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) => {
+const StakingModal: React.FC<StakingModalProps> = ({
+  package: pkg,
+  onClose,
+  hasPreferredBadge,
+  hasAdvanced,
+}) => {
+  const preferred = Boolean(hasPreferredBadge ?? hasAdvanced ?? false);
+
   const { address, chainId: connectedChainId, isConnected } = useAccount();
   const wagmiPublic = useWagmiPublicClient({ chainId: bsc.id });
   const { data: walletClient } = useWalletClient();
@@ -195,75 +206,66 @@ const StakingModal: React.FC<StakingModalProps> = ({ package: pkg, onClose }) =>
   /* ===========================
      Chain guard
   =========================== */
-  
+  const [chainIssue, setChainIssue] = useState<string | null>(null);
 
-  // Chain guard
-const [chainIssue, setChainIssue] = useState<string | null>(null);
-
-useEffect(() => {
-  let stop = false;
-
-  // If Wagmi already says BSC, trust it.
-  if (connectedChainId === bsc.id) {
-    setChainIssue(null);
-    return;
-  }
-
-  (async () => {
-    if (!isConnected || !walletClient) {
-      if (!stop) setChainIssue(null); // don’t scare the user while wallet spins up
+  useEffect(() => {
+    let stop = false;
+    if (connectedChainId === bsc.id) {
+      setChainIssue(null);
       return;
     }
-    try {
-      const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
-      const onBsc = hex?.toLowerCase() === `0x${bsc.id.toString(16)}`.toLowerCase();
-      if (!stop) setChainIssue(onBsc ? null : "Please switch your wallet to BSC Mainnet");
-    } catch {
-      // If request fails but Wagmi thinks we’re on BSC, treat as OK.
-      if (!stop) {
-        setChainIssue(connectedChainId === bsc.id ? null : "Please switch your wallet to BSC Mainnet");
+    (async () => {
+      if (!isConnected || !walletClient) {
+        if (!stop) setChainIssue(null);
+        return;
       }
-    }
-  })();
-
-  return () => { stop = true; };
-}, [isConnected, walletClient, connectedChainId]);
-
+      try {
+        const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
+        const onBsc = hex?.toLowerCase() === `0x${bsc.id.toString(16)}`.toLowerCase();
+        if (!stop) setChainIssue(onBsc ? null : "Please switch your wallet to BSC Mainnet");
+      } catch {
+        if (!stop) {
+          setChainIssue(connectedChainId === bsc.id ? null : "Please switch your wallet to BSC Mainnet");
+        }
+      }
+    })();
+    return () => { stop = true; };
+  }, [isConnected, walletClient, connectedChainId]);
 
   async function ensureBsc() {
-  if (!walletClient) throw new Error("Connect wallet.");
-  // Fast path: Wagmi already on BSC.
-  if (connectedChainId === bsc.id) return;
-
-  const targetHex = `0x${bsc.id.toString(16)}`;
-  try {
-    await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
-  } catch (e: any) {
-    if (e?.code !== 4902) throw new Error("Please switch your wallet to BSC Mainnet.");
-    await walletClient.request({
-      method: "wallet_addEthereumChain",
-      params: [{
-        chainId: targetHex,
-        chainName: "BSC Mainnet",
-        rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
-        nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
-        blockExplorerUrls: ["https://bscscan.com"],
-      }],
-    });
-    await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+    if (!walletClient) throw new Error("Connect wallet.");
+    if (connectedChainId === bsc.id) return;
+    const targetHex = `0x${bsc.id.toString(16)}`;
+    try {
+      await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+    } catch (e: any) {
+      if (e?.code !== 4902) throw new Error("Please switch your wallet to BSC Mainnet.");
+      await walletClient.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: targetHex,
+          chainName: "BSC Mainnet",
+          rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
+          nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+          blockExplorerUrls: ["https://bscscan.com"],
+        }],
+      });
+      await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+    }
   }
-}
-
 
   /* ===========================
      Compositions
   =========================== */
   const { compositions: compRows, isLoading: compLoading, error: compError } =
     useAllowedCompositions();
+
+  // If not preferred, force single option [100,0,0]
   const validCompositions = useMemo<number[][]>(() => {
+    if (!preferred) return [[100, 0, 0]];
     const rows = compRows.map((r) => [r.yYearnPct, r.sYearnPct, r.pYearnPct]);
     return rows.length ? rows : [[100, 0, 0]];
-  }, [compRows]);
+  }, [compRows, preferred]);
 
   const [selectedIdx, setSelectedIdx] = useState(0);
   useEffect(() => {
@@ -351,7 +353,6 @@ useEffect(() => {
         ]);
         setHaveWei([by, bs, bp]);
       } catch (e) {
-        err("balanceOf failed", e);
         setHaveWei([0n, 0n, 0n]);
       }
     })();
@@ -366,15 +367,14 @@ useEffect(() => {
     (amtsAll[2] <= haveWei[2]);
 
   /* ===========================
-     Referrer UI + validation
+     Referrer UI + validation (badge-gated)
   =========================== */
+  const isAddr48 = (a?: string): a is Address => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
   const [referrerInput, setReferrerInput] = useState<string>(DEFAULT_REFERRER);
   const [refValid, setRefValid] = useState<boolean | null>(null);
   const [refChecking, setRefChecking] = useState(false);
   const [showFullRef, setShowFullRef] = useState(false);
   const refInputEl = useRef<HTMLInputElement>(null);
-
-  const isAddr = (a?: string): a is Address => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
 
   async function isReferrerEligible(addr: Address): Promise<boolean> {
     try {
@@ -399,13 +399,19 @@ useEffect(() => {
   }
 
   useEffect(() => {
+    if (!preferred) {
+      setRefValid(true);
+      setRefChecking(false);
+      setReferrerInput(DEFAULT_REFERRER);
+      return;
+    }
     const val = referrerInput?.trim();
     if (!val) {
       setRefValid(null);
       setRefChecking(false);
       return;
     }
-    if (!isAddr(val)) {
+    if (!isAddr48(val)) {
       setRefValid(false);
       setRefChecking(false);
       return;
@@ -420,11 +426,12 @@ useEffect(() => {
       }
     }, 400);
     return () => clearTimeout(t);
-  }, [referrerInput]);
+  }, [referrerInput, preferred]);
 
   function finalReferrer(): Address {
+    if (!preferred) return DEFAULT_REFERRER;
     const v = (referrerInput || "").trim();
-    return isAddr(v) && (refValid !== false) ? (v as Address) : DEFAULT_REFERRER;
+    return isAddr48(v) && (refValid !== false) ? (v as Address) : DEFAULT_REFERRER;
   }
 
   /* ===========================
@@ -521,22 +528,20 @@ useEffect(() => {
     if (envIssue) return envIssue;
     if (!address) return "Connect wallet.";
 
-   // Chain check (prefer Wagmi)
-  if (connectedChainId !== bsc.id) {
-    try {
-      if (walletClient) {
-        const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
-        if (hex?.toLowerCase() !== `0x${bsc.id.toString(16)}`.toLowerCase()) {
+    if (connectedChainId !== bsc.id) {
+      try {
+        if (walletClient) {
+          const hex = (await walletClient.request({ method: "eth_chainId" })) as string;
+          if (hex?.toLowerCase() !== `0x${bsc.id.toString(16)}`.toLowerCase()) {
+            return "Please switch your wallet to BSC Mainnet.";
+          }
+        } else {
           return "Please switch your wallet to BSC Mainnet.";
         }
-      } else {
+      } catch {
         return "Please switch your wallet to BSC Mainnet.";
       }
-    } catch {
-      return "Please switch your wallet to BSC Mainnet.";
     }
-  }
-
 
     if (selected[0] + selected[1] + selected[2] !== 100) return "Composition must sum to 100%.";
     if (!meetsMin) return `Amount must be at least ${min}.`;
@@ -544,7 +549,7 @@ useEffect(() => {
     if (yWei + sWei + pWei === 0n) return "Total amount is zero.";
 
     const paused = await isPaused(); if (paused === true) return "Contract is paused.";
-    const onPkg = await readPackageInfo(BigInt(pkg.id));
+    const onPkg = await readPackageInfo(BigInt(pkg.id as number));
     if (onPkg?.isActive === false) return "Package is inactive on-chain.";
     if (onPkg?.minStakeAmount) {
       const total = yWei + sWei + pWei;
@@ -554,16 +559,15 @@ useEffect(() => {
     }
 
     if (!finalRef) return "Referrer missing.";
-    const refOK = await isReferrerEligible(finalRef);
-    if (!refOK) return "Referrer is not eligible (must be whitelisted or have staked before).";
 
+    // Balance checks (per-token)
     const names = syms;
     const addrs = [yYearn, sYearn, pYearn];
     const needs = [yWei, sWei, pWei];
     for (let i = 0; i < 3; i++) {
       const need = needs[i]; if (need === 0n) continue;
       const bal = (await publicClient.readContract({ address: addrs[i], abi: ERC20_ABI, functionName: "balanceOf", args: [address] })) as bigint;
-      if (bal < need) return `${names[i]}: insufficient balance. Need ${need.toString()}, have ${bal.toString()}`;
+      if (bal < need) return `${names[i]}: insufficient balance.`;
     }
     return null;
   }
@@ -581,7 +585,7 @@ useEffect(() => {
   async function sendStakeTx(finalRef: Address): Promise<Hex> {
     if (!walletClient || !address) throw new Error("Wallet not ready");
 
-    const pid = BigInt(pkg.id);
+    const pid = BigInt(pkg.id as number);
     const call = {
       address: stakingContract,
       abi: STAKING_ABI,
@@ -645,14 +649,13 @@ useEffect(() => {
 
       const ref = finalReferrer();
 
-      // === NEW: get on-chain package info so we can prefill optimistic row ===
       if (packageId == null) throw new Error("Unknown package id.");
       const onPkg = await readPackageInfo(BigInt(packageId));
       if (!onPkg) throw new Error("Failed to read package info.");
 
       const pkgRules = {
         durationInDays: Number(onPkg.durationInDays || 0),
-        aprBps: Number(onPkg.apr || 0), // contract returns bps (e.g. 2000)
+        aprBps: Number(onPkg.apr || 0),
         monthlyUnstake: Boolean(onPkg.monthlyUnstake),
         isActive: Boolean(onPkg.isActive),
         monthlyAPRClaimable: Boolean(onPkg.monthlyAPRClaimable),
@@ -660,7 +663,6 @@ useEffect(() => {
         principalLocked: Boolean(onPkg.principalLocked),
       };
 
-      // Compute first "next claim" timestamp (seconds)
       const startedAt = Math.floor(Date.now() / 1000);
       const nextClaimAt = pkgRules.monthlyAPRClaimable && pkgRules.claimableIntervalSec > 0
         ? startedAt + pkgRules.claimableIntervalSec
@@ -697,7 +699,7 @@ useEffect(() => {
         key: `opt-${hash}`,
         txHash: hash,
         user: address,
-        packageId,  
+        packageId,
         packageName: pkg.name,
         startTs: startedAt,
         status: "Pending",
@@ -705,11 +707,10 @@ useEffect(() => {
         compositionPct: [selected[0], selected[1], selected[2]],
         referrer: ref,
 
-        // NEW bits that fix the card:
-        aprPct: (pkgRules.aprBps ?? 0) / 100,  // 2000 bps => 20.00%
-        pkgRules,                               // full rules for UI logic
-        nextClaimAt,                            // seconds since epoch
-        
+        // Bits that fix the card:
+        aprPct: (pkgRules.aprBps ?? 0) / 100,
+        pkgRules,
+        nextClaimAt,
       });
 
     } catch (e: unknown) {
@@ -729,13 +730,12 @@ useEffect(() => {
     isApproving || isStaking || !!stakeTxHash || !address ||
     amountNum < min || (!isMultipleOk && mStep > 1) ||
     validCompositions.length === 0 || !!chainIssue ||
-    (yWei + sWei + pWei === 0n) || !hasSufficientBalances || refValid === false;
+    (yWei + sWei + pWei === 0n) || !hasSufficientBalances || (preferred && refValid === false);
 
   const mainBtnText =
     isApproving ? "Approving…" :
     isStaking && !stakeTxHash ? "Sending stake…" :
     stakeTxHash ? "Confirming…" :
-    stakeConfirmed ? "Staked" :
     "Approve & Stake";
 
   const formatWei = (wei: bigint, dec: number) => prettyFixed(wei, dec, 2);
@@ -747,16 +747,13 @@ useEffect(() => {
     /* Backdrop */
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center
                 bg-black/60 backdrop-blur-sm overscroll-contain">
-
       {/* Dialog (bottom sheet on mobile, centered on ≥sm) */}
       <div
-  className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl
+        className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl
              rounded-t-2xl sm:rounded-2xl shadow-2xl
              h-[88vh] supports-[height:100dvh]:h-[88dvh]
              flex flex-col overflow-hidden"
->
-
-
+      >
         {/* Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
                         border-b border-gray-200/60 dark:border-white/10
@@ -775,10 +772,9 @@ useEffect(() => {
 
         {/* Body */}
         <div
-  className="flex-1 min-h-0 overflow-y-auto touch-pan-y overscroll-contain
+          className="flex-1 min-h-0 overflow-y-auto touch-pan-y overscroll-contain
              px-5 sm:px-6 py-4 sm:py-5 space-y-5"
->
-
+        >
           {/* Summary */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl p-3 sm:p-4 bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 border border-violet-100 dark:border-white/10">
@@ -868,82 +864,93 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Referrer */}
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-800 dark:text-gray-200">Referrer Address</label>
-            <div className="relative flex items-center gap-2">
-              <div
-                className={`absolute inset-y-0 left-0 flex items-center px-3 font-mono text-gray-800 dark:text-gray-100 transition-opacity
+          {/* Referrer (only for preferred wallets) */}
+          {preferred ? (
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-800 dark:text-gray-200">Referrer Address</label>
+              <div className="relative flex items-center gap-2">
+                <div
+                  className={`absolute inset-y-0 left-0 flex items-center px-3 font-mono text-gray-800 dark:text-gray-100 transition-opacity
                   ${showFullRef ? "opacity-0 pointer-events-none" : "opacity-100"}`}
-                style={{ whiteSpace: "nowrap" }}
-              >
-                {isAddr(referrerInput)
-                  ? `${referrerInput.slice(0, 6)}...${referrerInput.slice(-6)}`
-                  : referrerInput || DEFAULT_REFERRER}
-              </div>
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  {isAddr48(referrerInput)
+                    ? `${referrerInput.slice(0, 6)}...${referrerInput.slice(-6)}`
+                    : referrerInput || DEFAULT_REFERRER}
+                </div>
 
-              <input
-                ref={refInputEl}
-                type="text"
-                value={referrerInput}
-                onChange={(e) => { setReferrerInput(e.target.value.trim()); setRefValid(null); }}
-                onFocus={() => {
-                  setShowFullRef(true);
-                  requestAnimationFrame(() => {
-                    if (refInputEl.current) {
-                      refInputEl.current.scrollLeft = refInputEl.current.scrollWidth;
-                    }
-                  });
-                }}
-                onBlur={() => setShowFullRef(false)}
-                placeholder={DEFAULT_REFERRER}
-                className={`w-full px-3 py-3 rounded-xl border font-mono focus:ring-2 focus:border-transparent
+                <input
+                  ref={refInputEl}
+                  type="text"
+                  value={referrerInput}
+                  onChange={(e) => { setReferrerInput(e.target.value.trim()); setRefValid(null); }}
+                  onFocus={() => {
+                    setShowFullRef(true);
+                    requestAnimationFrame(() => {
+                      if (refInputEl.current) {
+                        refInputEl.current.scrollLeft = refInputEl.current.scrollWidth;
+                      }
+                    });
+                  }}
+                  onBlur={() => setShowFullRef(false)}
+                  placeholder={DEFAULT_REFERRER}
+                  className={`w-full px-3 py-3 rounded-xl border font-mono focus:ring-2 focus:border-transparent
                   ${refValid === false ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-300 dark:border-rose-700 focus:ring-rose-500"
                                        : "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-white/10 focus:ring-violet-500"}
                   ${showFullRef ? "text-gray-900 dark:text-gray-100" : "text-transparent caret-gray-900 dark:caret-white"}`}
-                style={{ whiteSpace: "nowrap", overflowX: "auto", overflowY: "hidden" }}
-              />
+                  style={{ whiteSpace: "nowrap", overflowX: "auto", overflowY: "hidden" }}
+                />
 
-              {refChecking && <div className="w-4 h-4 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />}
-              {refValid === true && !refChecking && <Check className="w-5 h-5 text-emerald-500" />}
-              {refValid === false && !refChecking && <AlertTriangle className="w-5 h-5 text-rose-500" />}
+                {refChecking && <div className="w-4 h-4 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />}
+                {refValid === true && !refChecking && <Check className="w-5 h-5 text-emerald-500" />}
+                {refValid === false && !refChecking && <AlertTriangle className="w-5 h-5 text-rose-500" />}
+              </div>
+
+              {refValid === false && (
+                <p className="text-xs text-rose-600 dark:text-rose-400">
+                  Referrer is not eligible (must be whitelisted or have staked before).
+                </p>
+              )}
             </div>
-
-            {refValid === false && (
-              <p className="text-xs text-rose-600 dark:text-rose-400">
-                Referrer is not eligible (must be whitelisted or have staked before).
-              </p>
-            )}
-          </div>
+          ) : null}
 
           {/* Composition */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Choose a composition</h4>
+              <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
+                {preferred ? "Choose a composition" : "Composition"}
+              </h4>
               <span className="text-xs text-gray-500 dark:text-gray-400">
-                {compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`}
+                {preferred ? (compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`) : "Locked"}
               </span>
             </div>
 
-            <div className="grid grid-template gap-2.5"
-                 style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}>
-              {validCompositions.map((c, i) => {
-                const active = i === selectedIdx;
-                return (
-                  <button
-                    key={`${c.join("-")}-${i}`}
-                    onClick={() => setSelectedIdx(i)}
-                    className={`px-3.5 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
-                      active
-                        ? "bg-violet-600 text-white border-violet-600 shadow-sm"
-                        : "bg-white/60 dark:bg-white/5 text-gray-800 dark:text-gray-200 border-gray-300/60 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/10"
-                    }`}
-                  >
-                    [{c.join(", ")}]
-                  </button>
-                );
-              })}
-            </div>
+            {preferred ? (
+              <div className="grid grid-template gap-2.5"
+                   style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}>
+                {validCompositions.map((c, i) => {
+                  const active = i === selectedIdx;
+                  return (
+                    <button
+                      key={`${c.join("-")}-${i}`}
+                      onClick={() => setSelectedIdx(i)}
+                      className={`px-3.5 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
+                        active
+                          ? "bg-violet-600 text-white border-violet-600 shadow-sm"
+                          : "bg-white/60 dark:bg-white/5 text-gray-800 dark:text-gray-200 border-gray-300/60 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/10"
+                      }`}
+                    >
+                      [{c.join(", ")}]
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                <LockIcon className="w-4 h-4" />
+                <span>Fixed to [100, 0, 0] (yYearn only)</span>
+              </div>
+            )}
           </div>
 
           {/* Allocation */}
@@ -952,10 +959,10 @@ useEffect(() => {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
-                { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0] },
-                { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1] },
-                { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2] },
-              ].map((r) => {
+                { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0], show: true },
+                { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1], show: preferred }, // hide if !preferred
+                { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2], show: preferred }, // hide if !preferred
+              ].filter(r => r.show).map((r) => {
                 const lacking = r.need > r.have;
                 return (
                   <div
@@ -1019,17 +1026,9 @@ useEffect(() => {
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={handleApproveAndStake}
-              disabled={
-                isApproving || isStaking || !!stakeTxHash || !address ||
-                amountNum < min || (!isMultipleOk && mStep > 1) ||
-                validCompositions.length === 0 || !!chainIssue ||
-                (yWei + sWei + pWei === 0n) || !hasSufficientBalances || refValid === false
-              }
+              disabled={mainDisabled}
               className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold transition-all ${
-                (isApproving || isStaking || !!stakeTxHash || !address ||
-                 amountNum < min || (!isMultipleOk && mStep > 1) ||
-                 validCompositions.length === 0 || !!chainIssue ||
-                 (yWei + sWei + pWei === 0n) || !hasSufficientBalances || refValid === false)
+                mainDisabled
                   ? "bg-gradient-to-r from-violet-900/30 to-indigo-900/30 text-gray-400 cursor-not-allowed"
                   : "bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white shadow-sm"}`}
             >

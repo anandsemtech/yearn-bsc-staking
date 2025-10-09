@@ -94,6 +94,12 @@ export default function Dashboard() {
     return () => clearTimeout(t);
   }, [hasAdvancedRaw]);
 
+  // Somewhere near the top of Dashboard.tsx
+  const userHasPreferredBadge =
+    Array.isArray(honoraryItems) && honoraryItems.some((b) =>
+      b.title?.toLowerCase().includes("preferred") // adjust condition
+    );
+   
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       {/* Optional popup about owned badges */}
@@ -123,10 +129,13 @@ export default function Dashboard() {
         <StakingModal
           package={selectedPackage}
           onClose={() => setSelectedPackage(null)}
-          hasAdvanced={hasAdvanced && !badgesLoading}
+          // Only enable pro controls when badge state is resolved AND true
+          hasAdvanced={!badgesLoading && !!userHasPreferredBadge}
           honoraryItems={honoraryItems}
         />
       )}
+
+
     </div>
   );
 }
