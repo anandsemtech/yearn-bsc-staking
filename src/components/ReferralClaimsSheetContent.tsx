@@ -34,14 +34,17 @@ const TabBtn = ({
   onClick,
   children,
   dense,
+  ariaLabel,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
   dense: boolean;
+  ariaLabel?: string;
 }) => (
   <button
     onClick={onClick}
+    aria-label={ariaLabel}
     className={[
       dense ? "px-3 py-2" : "px-4 py-2.5",
       "rounded-xl text-[12px] font-semibold inline-flex items-center gap-2 transition-colors",
@@ -196,7 +199,6 @@ export default function ReferralClaimsSheetContent({
     <div className={padBlock}>
       {/* Header row */}
       <div className="flex items-center gap-2">
-        
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => refetch()}
@@ -205,7 +207,7 @@ export default function ReferralClaimsSheetContent({
             title={busy ? "Cooling down…" : "Refresh"}
             className={[
               "inline-flex items-center rounded-lg border transition",
-              "gap-0 sm:gap-2",                       // no gap on mobile, gap on ≥sm
+              "gap-0 sm:gap-2",
               dense ? "px-2.5 py-1.5 text-[11px]" : "px-3 py-2 text-[12px]",
               busy
                 ? "opacity-60 cursor-not-allowed border-white/10 text-gray-400"
@@ -215,36 +217,71 @@ export default function ReferralClaimsSheetContent({
             <RefreshCcw className={"h-4 w-4 " + (sgLoading ? "animate-spin" : "")} />
             <span className="hidden sm:inline">{busy ? "Cooling down…" : "Refresh"}</span>
           </button>
-
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2">
-        <TabBtn active={tab === "referral"} onClick={() => setTab("referral")} dense={dense}>
-          <TrendingUp className="w-4.5 h-4.5 text-blue-300" /> Referral
+        <TabBtn
+          active={tab === "referral"}
+          onClick={() => setTab("referral")}
+          dense={dense}
+          ariaLabel="Referral"
+        >
+          <TrendingUp className="w-4.5 h-4.5 text-blue-300" />
+          <span >Referral</span>
         </TabBtn>
-        <TabBtn active={tab === "star"} onClick={() => setTab("star")} dense={dense}>
-          <Star className="w-4.5 h-4.5 text-purple-300" /> Star
+        <TabBtn
+          active={tab === "star"}
+          onClick={() => setTab("star")}
+          dense={dense}
+          ariaLabel="Star"
+        >
+          <Star className="w-4.5 h-4.5 text-purple-300" />
+          <span >Star</span>
         </TabBtn>
-        <TabBtn active={tab === "golden"} onClick={() => setTab("golden")} dense={dense}>
-          <Award className="w-4.5 h-4.5 text-amber-300" /> Golden
+        <TabBtn
+          active={tab === "golden"}
+          onClick={() => setTab("golden")}
+          dense={dense}
+          ariaLabel="Golden"
+        >
+          <Award className="w-4.5 h-4.5 text-amber-300" />
+          <span >Golden</span>
         </TabBtn>
       </div>
 
       {/* Referral */}
       {tab === "referral" && (
         <section className={dense ? "space-y-4" : "space-y-5"}>
-          <div className="flex flex-wrap items-center gap-2">
-            <StatChip label="Lifetime (Referral)" value={referralLifetime.toLocaleString()} dense={dense} />
-            <span className="inline-flex items-center gap-1 text-[11px] text-gray-300">
-              <Clock className="w-3.5 h-3.5 text-gray-400" /> Available now
-            </span>
-            <span className="ml-auto" />
-            <StatChip label="YY" value={yy.toLocaleString()} dense={dense} />
-            <StatChip label="SY" value={sy.toLocaleString()} dense={dense} />
-            <StatChip label="PY" value={py.toLocaleString()} dense={dense} />
-            <StatChip label="Total Available" value={referralAvailable.toLocaleString()} dense={dense} />
+          {/* New layout: left group + big Lifetime on right */}
+          <div className="grid grid-cols-12 gap-3">
+            {/* Left group */}
+            <div className="col-span-12 sm:col-span-8 rounded-2xl bg-white/8 ring-1 ring-white/10 px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1 text-[11px] text-gray-300">
+                  <Clock className="w-3.5 h-3.5 text-gray-400" /> Available now
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <StatChip label="YY" value={yy.toLocaleString()} dense={dense} />
+                <StatChip label="SY" value={sy.toLocaleString()} dense={dense} />
+                <StatChip label="PY" value={py.toLocaleString()} dense={dense} />
+                <StatChip
+                  label="Total Available"
+                  value={referralAvailable.toLocaleString()}
+                  dense={dense}
+                />
+              </div>
+            </div>
+
+            {/* Right: Lifetime prominent */}
+            <div className="col-span-12 sm:col-span-4 rounded-2xl bg-white/8 ring-1 ring-white/10 px-4 py-3">
+              <div className="text-[12px] text-gray-300/90">Lifetime (Referral)</div>
+              <div className="mt-1 text-[22px] sm:text-[26px] leading-tight font-extrabold text-white tabular-nums">
+                {referralLifetime.toLocaleString()}
+              </div>
+            </div>
           </div>
 
           <div className="h-px bg-white/10" />

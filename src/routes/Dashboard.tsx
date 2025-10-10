@@ -14,6 +14,9 @@ import HonoraryNftPopup from "@/components/HonoraryNftPopup";
 import ReferralSection from "@/components/ReferralSection";
 import MobileFooterNav from "@/components/MobileFooterNav";
 
+import StarJourneyPanel from "@/components/stars/StarJourneyPanel";
+
+
 /* === EXACT preferred badge contracts from env === */
 const YEARNCHAMPNFT = (import.meta.env.VITE_YEARNCHAMPNFT ||
   "0xb065ab52d4aE43dba2b8b87cf6F6873becD919a3") as Address;
@@ -180,6 +183,8 @@ export default function Dashboard() {
       <GlassPanel title="Active Packages" className="mt-8" id="active-packages">
         <ActivePackages rows={rows} loading={loading} error={error} onRefresh={refresh} />
       </GlassPanel>
+
+      
 
       {selectedPackage && (
         <StakingModal

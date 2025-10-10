@@ -138,7 +138,7 @@ function SheetPortal({
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div className="justify-self-center h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
             <div className="justify-self-center text-base font-semibold">
-              {title}
+              {title ?? ""}
             </div>
             <button
               className="justify-self-end p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
@@ -204,7 +204,7 @@ function DesktopModal({
           ].join(" ")}
         >
           <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
-            <div className="text-sm font-semibold text-white">{title || "My Claims"}</div>
+            <div className="text-sm font-semibold text-white">{title ?? "My Claims"}</div>
             <button
               onClick={onClose}
               className="ml-auto px-2 py-1 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
@@ -238,14 +238,13 @@ const ReferralSection: React.FC<Props> = ({
   className,
   onOpenClaims,
 }) => {
-  if (!hasPreferredBadge) return null;
-
+  // ✅ Always call hooks first to keep hook order stable across renders.
   const isMobile = useIsMobile(640);
   const { address } = useAccount();
 
   // Light profile fetch for the card/preview
   const { loading, decimals, myTotalYY, levels, invalidate } = useReferralProfile(
-    address as `0x${string}`,
+    (address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
     { ttlMs: 120_000, perLevel: 120 }
   );
 
@@ -256,7 +255,10 @@ const ReferralSection: React.FC<Props> = ({
   }, [levels]);
 
   const L1 = levelMap.get(1) ?? { totalYY: 0n, rows: [] };
-  const link = typeof window !== "undefined" ? `${window.location.origin}/ref/${address ?? ""}` : "";
+
+  // SSR-safe link
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const link = origin && address ? `${origin}/ref/${address}` : "";
 
   const [copied, setCopied] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
@@ -292,6 +294,9 @@ const ReferralSection: React.FC<Props> = ({
   const startMain = (safePageMain - 1) * PAGE_SIZE;
   const visibleMain = rowsMain.slice(startMain, startMain + PAGE_SIZE);
   const totalYYMain = levelMap.get(effectiveMain)?.totalYY ?? 0n;
+
+  // ❗️Only decide what to render AFTER hooks have run.
+  if (!hasPreferredBadge) return <></>;
 
   return (
     <>
@@ -559,28 +564,26 @@ const ReferralSection: React.FC<Props> = ({
         />
       </SheetPortal>
 
-      {/* My Claims — bottom sheet on mobile, centered modal on desktop */}
-      {isMobile ? (
-        <SheetPortal
-          open={claimsOpen}
-          onClose={() => setClaimsOpen(false)}
-          title="My Claims"
-          maxVh={92}
-          bottomGapPx={32}
-        >
-          <ReferralClaimsSheetContent />
-        </SheetPortal>
-      ) : (
-        <DesktopModal
-          open={claimsOpen}
-          onClose={() => setClaimsOpen(false)}
-          title="My Claims"
-          maxW="max-w-xl"
-        >
-          <ReferralClaimsSheetContent />
-        </DesktopModal>
-      )}
 
+      {/* My Claims — keep both variants mounted; gate with `open` */}
+      <SheetPortal
+        open={claimsOpen && isMobile}
+        onClose={() => setClaimsOpen(false)}
+        title="My Claims"
+        maxVh={92}
+        bottomGapPx={32}
+      >
+        <ReferralClaimsSheetContent />
+      </SheetPortal>
+
+      <DesktopModal
+        open={claimsOpen && !isMobile}
+        onClose={() => setClaimsOpen(false)}
+        title="My Claims"
+        maxW="max-w-xl"
+      >
+        <ReferralClaimsSheetContent />
+      </DesktopModal>
     </>
   );
 };
@@ -638,10 +641,7 @@ function Tabs(props: {
   return (
     <div className="space-y-4">
       {/* Tab header */}
-      
       <div className="mt-3 flex gap-2 overflow-x-auto -mx-5 px-5 pb-1 scroll-px-5 snap-x snap-mandatory">
-
-
         <button onClick={() => setTab("l1")} className={tabBtnCls(tab === "l1")}>
           <LinkIcon className="w-4.5 h-4.5" /> Level 1
         </button>
