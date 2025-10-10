@@ -201,16 +201,21 @@ export default function ReferralClaimsSheetContent({
           <button
             onClick={() => refetch()}
             disabled={busy}
+            aria-label={busy ? "Cooling down…" : "Refresh"}
+            title={busy ? "Cooling down…" : "Refresh"}
             className={[
-              "inline-flex items-center gap-2 rounded-lg border transition",
-              dense ? "px-3 py-1.5 text-[11px]" : "px-3.5 py-2 text-[12px]",
-              busy ? "opacity-60 cursor-not-allowed border-white/10 text-gray-400"
-                   : "border-white/15 hover:bg-white/5 text-white",
+              "inline-flex items-center rounded-lg border transition",
+              "gap-0 sm:gap-2",                       // no gap on mobile, gap on ≥sm
+              dense ? "px-2.5 py-1.5 text-[11px]" : "px-3 py-2 text-[12px]",
+              busy
+                ? "opacity-60 cursor-not-allowed border-white/10 text-gray-400"
+                : "border-white/15 hover:bg-white/5 text-white",
             ].join(" ")}
           >
             <RefreshCcw className={"h-4 w-4 " + (sgLoading ? "animate-spin" : "")} />
-            {busy ? "Cooling down…" : "Refresh"}
+            <span className="hidden sm:inline">{busy ? "Cooling down…" : "Refresh"}</span>
           </button>
+
         </div>
       </div>
 
