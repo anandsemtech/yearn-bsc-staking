@@ -1,5 +1,4 @@
-// src/components/Header.tsx
-import { Settings, Menu, X, Zap, Copy, Wallet } from "lucide-react";
+import { Settings, X, Zap, Copy, Wallet } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -18,6 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 import UserSettingsModal from "./UserSettingsModal";
 import YearnTogetherMark from "./YearnTogetherMark";
+import HonoraryBadgeChip from "./HonoraryBadgeChip";
 
 /* ENV token addresses (optional) */
 const YYEARN = (import.meta.env.VITE_YYEARN_ADDRESS ?? "") as Address;
@@ -25,7 +25,6 @@ const SYEARN = (import.meta.env.VITE_SYEARN_ADDRESS ?? "") as Address;
 const PYEARN = (import.meta.env.VITE_PYEARN_ADDRESS ?? "") as Address;
 const USDT = (import.meta.env.VITE_USDT_ADDRESS ?? "") as Address;
 
-/* Minimal ERC20 ABI (balance only) */
 const ERC20_ABI = [
   {
     type: "function",
@@ -36,7 +35,6 @@ const ERC20_ABI = [
   },
 ] as const;
 
-/* Helpers */
 const fmt = (value: bigint, decimals: number, maxFrac = 4) => {
   const raw = formatUnits(value, decimals);
   if (!raw.includes(".")) return Number(raw).toLocaleString();
@@ -60,7 +58,6 @@ const TOKENS: ErcRow[] = [
   { key: "USDT", address: USDT, fallbackDecimals: 6, label: "USDT" },
 ];
 
-/* Tiny balance row */
 const Row: React.FC<{ symbol: string; value: string }> = ({ symbol, value }) => (
   <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
     <div className="flex items-center gap-2">
@@ -73,7 +70,6 @@ const Row: React.FC<{ symbol: string; value: string }> = ({ symbol, value }) => 
   </div>
 );
 
-/* Balances popover / sheet */
 const BalancesPopover: React.FC<{
   anchorRef: React.RefObject<HTMLButtonElement>;
   open: boolean;
@@ -113,7 +109,7 @@ const BalancesPopover: React.FC<{
 
   if (!open) return null;
 
-  // Desktop anchored popover (inline)
+  // Desktop anchored popover
   const desktop = (
     <div
       ref={popRef}
@@ -130,7 +126,7 @@ const BalancesPopover: React.FC<{
     </div>
   );
 
-  // Mobile bottom sheet (portal to <body>)
+  // Mobile bottom sheet — with top-right X, no bottom Close button
   const mobile = (
     <AnimatePresence>
       {/* Backdrop */}
@@ -164,23 +160,27 @@ const BalancesPopover: React.FC<{
           maxHeight: "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
         }}
       >
-        <div className="px-5 pt-2">
-          <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-white/20" />
+        {/* Header with grabber + X */}
+        <div className="px-5 pt-2 pb-3 border-b border-white/10 flex items-center">
+          <div className="mx-auto -ml-1 h-1.5 w-12 rounded-full bg-white/20" aria-hidden="true" />
+          <button
+            onClick={onClose}
+            className="ml-auto p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
+            aria-label="Close balances"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="px-5">
           <div className="mb-2 text-[11px] uppercase tracking-wide text-white/60">Balances</div>
         </div>
-        <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-2 space-y-2">
+
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-4 space-y-2">
           <Row symbol={native.symbol} value={native.value} />
           {rows.map((r) => (
             <Row key={r.symbol} symbol={r.symbol} value={r.value} />
           ))}
-        </div>
-        <div className="px-5 pb-2">
-          <button
-            onClick={onClose}
-            className="w-full rounded-2xl bg-white/10 hover:bg-white/15 text-white py-2 text-sm"
-          >
-            Close
-          </button>
         </div>
       </motion.div>
     </AnimatePresence>
@@ -208,10 +208,36 @@ const Header: React.FC = () => {
   const shortAddress = activeAddress ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}` : "";
 
   const [showSettings, setShowSettings] = useState(false);
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showCopiedTooltip, setShowCopiedTooltip] = useState(false);
   const [showBalances, setShowBalances] = useState(false);
   const walletBtnRef = useRef<HTMLButtonElement>(null);
+
+  const [honoraryChip, setHonoraryChip] = useState<null | { imageUrl: string; title: string }>(null);
+  useEffect(() => {
+    const onMin = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { imageUrl: string; title: string };
+      if (detail?.imageUrl) setHonoraryChip({ imageUrl: detail.imageUrl, title: detail.title ?? "Honorary Badge" });
+    };
+    window.addEventListener("honorary:minimize", onMin as EventListener);
+    return () => window.removeEventListener("honorary:minimize", onMin as EventListener);
+  }, []);
+
+  // 🔗 Listen to footer events
+  useEffect(() => {
+    const openBalances = () => setShowBalances(true);
+    const openSettings = () => setShowSettings(true);
+    const openWallet = () => open();
+
+    window.addEventListener("balances:open", openBalances as EventListener);
+    window.addEventListener("settings:open", openSettings as EventListener);
+    window.addEventListener("wallet:open", openWallet as EventListener);
+
+    return () => {
+      window.removeEventListener("balances:open", openBalances as EventListener);
+      window.removeEventListener("settings:open", openSettings as EventListener);
+      window.removeEventListener("wallet:open", openWallet as EventListener);
+    };
+  }, [open]);
 
   const copyAddress = async () => {
     if (!activeAddress) return;
@@ -225,23 +251,16 @@ const Header: React.FC = () => {
   const openAppKit = () => open();
 
   const handleDisconnect = async () => {
-    try {
-      await disconnectAsync();
-    } finally {
-      navigate("/", { replace: true });
-    }
+    try { await disconnectAsync(); }
+    finally { navigate("/", { replace: true }); }
   };
 
-  /* One-click BSC switch */
   async function ensureBsc(): Promise<void> {
     if (!walletClient) return;
     const targetHex = `0x${bsc.id.toString(16)}`;
     let currentHex: string | null = null;
-    try {
-      currentHex = (await walletClient.request({ method: "eth_chainId" })) as string;
-    } catch {}
+    try { currentHex = (await walletClient.request({ method: "eth_chainId" })) as string; } catch {}
     if (currentHex?.toLowerCase() === targetHex.toLowerCase()) return;
-
     try {
       await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
     } catch (e: any) {
@@ -261,13 +280,10 @@ const Header: React.FC = () => {
     }
   }
 
-  /* Native balance */
   const { data: nativeBal } = useBalance({
-    address,
-    query: { enabled: Boolean(address) },
+    address, query: { enabled: Boolean(address) },
   });
 
-  /* ERC20 balances */
   const [erc20, setErc20] = useState<
     Record<ErcRow["key"], { symbol: string; decimals: number; value: bigint }>
   >({
@@ -319,10 +335,7 @@ const Header: React.FC = () => {
 
     load();
     const id = setInterval(load, 15_000);
-    return () => {
-      disposed = true;
-      clearInterval(id);
-    };
+    return () => { disposed = true; clearInterval(id); };
   }, [address, publicClient, isConnected]);
 
   const popRows = useMemo(
@@ -350,12 +363,11 @@ const Header: React.FC = () => {
       <header className="bg-gray-900/80 backdrop-blur-md border-b border-gray-700 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
           <div className="flex justify-between items-center h-16">
-            {/* Logo */}
             <div className="flex items-center">
               <YearnTogetherMark className="h-7 text-white" />
             </div>
 
-            {/* Desktop Nav (only when connected) */}
+            {/* Desktop */}
             <div className="hidden md:flex items-center space-x-3">
               {isConnected && (
                 <>
@@ -363,8 +375,7 @@ const Header: React.FC = () => {
                     ref={walletBtnRef}
                     onClick={() => setShowBalances((v) => !v)}
                     className="p-2 rounded-lg hover:bg-gray-800 transition-colors"
-                    aria-label="Wallet balances"
-                    title="Wallet balances"
+                    aria-label="Wallet balances" title="Wallet balances"
                   >
                     <Wallet className="w-5 h-5 text-gray-300" />
                   </button>
@@ -372,11 +383,32 @@ const Header: React.FC = () => {
                   <button
                     onClick={openAppKit}
                     className="p-2 rounded-lg hover:bg-gray-800 transition-colors"
-                    aria-label="Open wallet"
-                    title="Open wallet"
+                    aria-label="Open wallet" title="Open wallet"
                   >
                     <Zap className="w-5 h-5 text-gray-300" />
                   </button>
+
+                  {honoraryChip &&
+                    createPortal(
+                      <motion.button
+                        onClick={() => window.dispatchEvent(new Event("honorary:open"))}
+                        className="md:hidden fixed z-[1100] top-[calc(env(safe-area-inset-top,0px)+10px)] right-[calc(env(safe-area-inset-right,0px)+12px)] rounded-full border border-white/20 bg-white/12 backdrop-blur p-1.5 shadow-md active:scale-95"
+                        initial={{ opacity: 0, scale: 0.9, y: -6 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                        aria-label="Open Honorary Badge"
+                      >
+                        <motion.img
+                          src={honoraryChip.imageUrl}
+                          alt={honoraryChip.title}
+                          className="w-7 h-7 rounded-md ring-1 ring-white/25 object-cover"
+                          animate={{ boxShadow: ["0 0 0px rgba(0,0,0,0)", "0 0 10px rgba(255,195,70,0.35)", "0 0 0px rgba(0,0,0,0)"] }}
+                          transition={{ repeat: Infinity, duration: 2.8 }}
+                        />
+                      </motion.button>,
+                      document.body
+                    )
+                  }
 
                   <button
                     onClick={() => setShowSettings(true)}
@@ -394,8 +426,7 @@ const Header: React.FC = () => {
                         <button
                           onClick={copyAddress}
                           className="p-1 hover:bg-green-800 rounded transition-colors"
-                          title="Copy address"
-                          aria-label="Copy address"
+                          title="Copy address" aria-label="Copy address"
                         >
                           <Copy className="w-3 h-3 text-green-400" />
                         </button>
@@ -419,14 +450,8 @@ const Header: React.FC = () => {
               )}
             </div>
 
-            {/* Mobile Menu Button */}
-            <button
-              onClick={() => setShowMobileMenu((v) => !v)}
-              className="md:hidden p-2 rounded-lg hover:bg-gray-800 transition-colors"
-              aria-label="Toggle menu"
-            >
-              {showMobileMenu ? <X className="w-6 h-6 text-white" /> : <Menu className="w-6 h-6 text-white" />}
-            </button>
+            {/* Mobile: no header menu (bottom nav handles actions) */}
+            <div className="md:hidden" />
           </div>
 
           {/* Wrong chain banner */}
@@ -443,50 +468,6 @@ const Header: React.FC = () => {
               )}
             </div>
           )}
-
-          {/* Mobile menu (only when connected) */}
-          {showMobileMenu && isConnected && (
-            <div className="md:hidden py-4 border-t border-gray-700">
-              <div className="flex flex-col space-y-4">
-                <button
-                  onClick={() => setShowBalances(true)}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-gray-800 text-gray-100"
-                >
-                  <span className="flex items-center gap-2">
-                    <Wallet className="w-4 h-4" />
-                    <span className="text-sm font-medium">Wallet balances</span>
-                  </span>
-                  <span className="text-xs opacity-70">View</span>
-                </button>
-
-                <button
-                  onClick={openAppKit}
-                  className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
-                >
-                  <Zap className="w-4 h-4" />
-                  <span className="text-sm">Open Wallet</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    setShowSettings(true);
-                    setShowMobileMenu(false);
-                  }}
-                  className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors"
-                >
-                  <Settings className="w-4 h-4" />
-                  <span className="text-sm">Settings</span>
-                </button>
-
-                <button
-                  onClick={handleDisconnect}
-                  className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium"
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Balances Popover / Sheet */}
@@ -499,7 +480,7 @@ const Header: React.FC = () => {
         />
       </header>
 
-      {/* Modals */}
+      {/* Settings Modal */}
       {showSettings && isConnected && (
         <UserSettingsModal onClose={() => setShowSettings(false)} />
       )}

@@ -1,4 +1,3 @@
-// src/routes/Dashboard.tsx
 import React, { useMemo, useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import { Navigate } from "react-router-dom";
@@ -13,11 +12,7 @@ import { useHonoraryNft } from "@/hooks/useHonoraryNft";
 import HonoraryNftPopup from "@/components/HonoraryNftPopup";
 
 import ReferralSection from "@/components/ReferralSection";
-import ReferralSummaryCard from "@/components/ReferralSummaryCard";
-import AppKitSheet from "@/components/ui/AppKitSheet";
-import ReferralTabsSheetContent from "@/components/ReferralTabsSheetContent";
-import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
-
+import MobileFooterNav from "@/components/MobileFooterNav";
 
 /* === EXACT preferred badge contracts from env === */
 const YEARNCHAMPNFT = (import.meta.env.VITE_YEARNCHAMPNFT ||
@@ -25,12 +20,11 @@ const YEARNCHAMPNFT = (import.meta.env.VITE_YEARNCHAMPNFT ||
 const YEARNBUDDYNFT = (import.meta.env.VITE_YEARNBUDDYNFT ||
   "0x18A562d77336FAEca3C6c0dA157B94C80d5359bD") as Address;
 
-const GlassPanel: React.FC<React.PropsWithChildren<{ title?: string; className?: string }>> = ({
-  title,
-  className,
-  children,
-}) => (
+const GlassPanel: React.FC<
+  React.PropsWithChildren<{ title?: string; className?: string; id?: string }>
+> = ({ title, className, id, children }) => (
   <section
+    id={id}
     className={[
       "relative rounded-3xl p-5 sm:p-6",
       "bg-white/10 backdrop-blur-xl",
@@ -40,15 +34,24 @@ const GlassPanel: React.FC<React.PropsWithChildren<{ title?: string; className?:
   >
     <div
       className="pointer-events-none absolute -inset-px rounded-3xl opacity-60"
-      style={{ background: "linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.02))" }}
+      style={{
+        background:
+          "linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.02))",
+      }}
     />
-    {title ? <h2 className="text-lg font-semibold text-white mb-4 relative">{title}</h2> : null}
+    {title ? (
+      <h2 className="text-lg font-semibold text-white mb-4 relative">
+        {title}
+      </h2>
+    ) : null}
     <div className="relative">{children}</div>
   </section>
 );
 
 export default function Dashboard() {
-  const [selectedPackage, setSelectedPackage] = useState<PackageData | null>(null);
+  const [selectedPackage, setSelectedPackage] = useState<PackageData | null>(
+    null
+  );
   const { address, isConnected } = useAccount();
   if (!isConnected || !address) return <Navigate to="/" replace />;
 
@@ -59,14 +62,7 @@ export default function Dashboard() {
     ttlMs: 60_000,
   });
 
-  // Badge detection ONLY for these two addresses
-  const {
-    badges,
-    show,
-    dismiss,
-    dontAskAgain,
-    loading: badgesLoading,
-  } = useHonoraryNft({
+  const { badges, show, dismiss, loading: badgesLoading } = useHonoraryNft({
     owner: address ?? null,
     contracts: [
       { address: YEARNCHAMPNFT, label: "YearnChamp" },
@@ -74,20 +70,20 @@ export default function Dashboard() {
     ],
   });
 
-  // Build fixed allow-set from those envs
   const preferredSet = useMemo(
     () => new Set([YEARNCHAMPNFT.toLowerCase(), YEARNBUDDYNFT.toLowerCase()]),
     []
   );
 
-  // ✅ Eligible if user owns either of the two badge contracts (address match only)
   const userHasPreferredBadge = useMemo(() => {
     return (badges || []).some(
-      (b) => b?.owned && b?.address && preferredSet.has(String(b.address).toLowerCase())
+      (b) =>
+        b?.owned &&
+        b?.address &&
+        preferredSet.has(String(b.address).toLowerCase())
     );
   }, [badges, preferredSet]);
 
-  // Small debounce to avoid flicker while badges resolve
   const [hasPreferred, setHasPreferred] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setHasPreferred(userHasPreferredBadge), 150);
@@ -98,46 +94,90 @@ export default function Dashboard() {
     () =>
       (badges || [])
         .filter((b) => b.owned)
-        .map((b) => ({ title: b.label, imageUrl: b.imageUrl, address: b.address })),
+        .map((b) => ({
+          title: b.label,
+          imageUrl: b.imageUrl,
+          address: b.address,
+        })),
     [badges]
   );
 
-  const [openRefSheet, setOpenRefSheet] = useState(false);
-  
-  const [openClaimsSheet, setOpenClaimsSheet] = useState(false);
+  const [forceHonoraryOpen, setForceHonoraryOpen] = useState(false);
+  useEffect(() => {
+    const openHandler = () => setForceHonoraryOpen(true);
+    window.addEventListener("honorary:open", openHandler as EventListener);
+    return () =>
+      window.removeEventListener("honorary:open", openHandler as EventListener);
+  }, []);
 
+  // Footer state + handlers
+  const [activeFooter, setActiveFooter] = useState<
+    "balances" | "wallet" | "settings" | "claims" | "referrals"
+  >("balances");
+
+  const openReferrals = () => {
+    setActiveFooter("referrals");
+    window.dispatchEvent(new CustomEvent("referrals:open"));
+  };
+
+  const openClaims = () => {
+    setActiveFooter("claims");
+    window.dispatchEvent(new CustomEvent("claims:open"));
+  };
+
+  // ⬇️ No scrolling — just request Header to open the balances sheet
+  const openBalances = () => {
+    setActiveFooter("balances");
+    window.dispatchEvent(new CustomEvent("balances:open"));
+  };
+
+  const openSettings = () => {
+    setActiveFooter("settings");
+    window.dispatchEvent(new CustomEvent("settings:open"));
+  };
+
+  const openWallet = async () => {
+    setActiveFooter("wallet");
+    const anyWin = window as any;
+    if (anyWin?.appKit?.open) await anyWin.appKit.open();
+    else if (anyWin?.reown?.open) await anyWin.reown.open();
+    else if (anyWin?.ethereum?.request) {
+      try {
+        await anyWin.ethereum.request({ method: "eth_requestAccounts" });
+      } catch {}
+    }
+    window.dispatchEvent(new CustomEvent("wallet:open"));
+  };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8">
-      {/* Badges popup (unchanged) */}
-      {show && honoraryItems.length > 0 && (
+    <div className="max-w-7xl mx-auto px-4 py-8 pb-[92px] md:pb-8">
+      {(show || forceHonoraryOpen) && honoraryItems.length > 0 && (
         <HonoraryNftPopup
           items={honoraryItems}
-          onClose={dismiss}
-          onDontAskAgainAll={() => dontAskAgain("all")}
-          onDontAskAgainSelected={(addrs) => dontAskAgain(addrs)}
+          onClose={() => {
+            setForceHonoraryOpen(false);
+            dismiss();
+          }}
+          onMinimizeToHeader={(hero) => {
+            window.dispatchEvent(
+              new CustomEvent("honorary:minimize", {
+                detail: {
+                  imageUrl: hero.imageUrl ?? "/images/placeholder.png",
+                  title: hero.title,
+                },
+              })
+            );
+            setForceHonoraryOpen(false);
+            dismiss();
+          }}
         />
       )}
 
-      {/* 🔐 Render the Referrals panel ONLY when the user actually owns Champ or Buddy */}
-
-      {!badgesLoading && hasPreferred && (
-        <GlassPanel title="My Dashboad" className="mt-8">
-          <ReferralSection
-            hasPreferredBadge
-            placeholders={{ referral: "—", star: "—", golden: "—" }}
-            onOpenClaims={() => setOpenClaimsSheet(true)}   // <-- wire opener
-          />
-        </GlassPanel>
-      )}
-     
-
-
-      <GlassPanel title="Available Packages" className="mt-8">
+      <GlassPanel title="Available Packages" className="mt-8" id="available-packages">
         <PackageCards onStakePackage={setSelectedPackage} />
       </GlassPanel>
 
-      <GlassPanel title="Active Packages" className="mt-8">
+      <GlassPanel title="Active Packages" className="mt-8" id="active-packages">
         <ActivePackages rows={rows} loading={loading} error={error} onRefresh={refresh} />
       </GlassPanel>
 
@@ -149,6 +189,17 @@ export default function Dashboard() {
           honoraryItems={honoraryItems}
         />
       )}
+
+      {/* Mobile footer — shows claims/referrals only when badge present */}
+      <MobileFooterNav
+        hasPreferredBadge={!badgesLoading && hasPreferred}
+        active={activeFooter}
+        onOpenReferrals={openReferrals}
+        onOpenClaims={openClaims}
+        onOpenBalances={openBalances}
+        onOpenSettings={openSettings}
+        onOpenWallet={openWallet}
+      />
     </div>
   );
 }

@@ -1,9 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL!,
-  import.meta.env.VITE_SUPABASE_ANON_KEY!
-);
+import { supabase } from "@/lib/supabaseClient";
 
 export type UserProfile = {
   address: string;
@@ -13,23 +8,32 @@ export type UserProfile = {
   updated_at?: string;
 };
 
+/** Upsert by primary key (address). Always lowercases address. */
 export async function upsertMyProfile(p: UserProfile) {
-  // address is the PK
+  const payload: UserProfile = {
+    ...p,
+    address: p.address.toLowerCase(),
+  };
+
   const { data, error } = await supabase
-    .from("user_profiles")
-    .upsert(p, { onConflict: "address" })
+    .from("profiles") // ← keep table name consistent with the modal
+    .upsert(payload, { onConflict: "address" })
     .select()
     .single();
+
   if (error) throw error;
   return data as UserProfile;
 }
 
+/** Returns null if not found. Address is normalized to lowercase. */
 export async function getMyProfile(address: string) {
   const { data, error } = await supabase
-    .from("user_profiles")
+    .from("profiles")
     .select("*")
-    .eq("address", address)
-    .single();
-  if (error && error.code !== "PGRST116") throw error; // not found is ok
+    .eq("address", address.toLowerCase())
+    .maybeSingle();
+
+  // PGRST116 = "Results contain 0 rows" (supabase-js maps this to null with maybeSingle)
+  if (error) throw error;
   return (data as UserProfile) || null;
 }

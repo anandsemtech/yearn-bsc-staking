@@ -1,4 +1,3 @@
-// src/components/ReferralSection.tsx
 // Mobile: AppKit-style bottom sheets (Levels / My Claims)
 // Desktop: inline explorer (always open). Uses lib/subgraph via useReferralProfile.
 
@@ -255,6 +254,18 @@ const ReferralSection: React.FC<Props> = ({
   const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
   const [claimsOpen, setClaimsOpen] = useState(false);  // My Claims (responsive)
 
+  // Footer → open-sheet event bridge
+  useEffect(() => {
+    const openRefs = () => setSheetOpen(true);
+    const openClaims = () => setClaimsOpen(true);
+    window.addEventListener("referrals:open", openRefs);
+    window.addEventListener("claims:open", openClaims);
+    return () => {
+      window.removeEventListener("referrals:open", openRefs);
+      window.removeEventListener("claims:open", openClaims);
+    };
+  }, []);
+
   // Shared explorer state (desktop inline + mobile sheet)
   const [page, setPage] = useState(1);
   const [level, setLevel] = useState<number>(1);
@@ -295,9 +306,9 @@ const ReferralSection: React.FC<Props> = ({
             <p className="text-[12px] text-gray-300/90">Invite • Track 15 Levels • Share</p>
           </div>
 
-          {/* Actions */}
+        {/* Actions */}
           <div className="ml-auto flex items-center gap-2">
-            {/* Refresh: icon-only on mobile, text on sm+ */}
+            {/* Refresh */}
             <button
               onClick={() => invalidate()}
               aria-label="Refresh referrals"
@@ -313,7 +324,7 @@ const ReferralSection: React.FC<Props> = ({
               onClick={() => {
                 setClaimsOpen(true);
                 if (isMobile) setSheetOpen(false);
-                onOpenClaims?.(); // optional: parent analytics
+                onOpenClaims?.();
               }}
               className="rounded-xl px-3 py-2 text-[12px] font-semibold bg-emerald-600 hover:bg-emerald-500 text-white"
             >

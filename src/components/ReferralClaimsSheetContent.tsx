@@ -196,9 +196,7 @@ export default function ReferralClaimsSheetContent({
     <div className={padBlock}>
       {/* Header row */}
       <div className="flex items-center gap-2">
-        <div className={dense ? "text-sm font-semibold text-white" : "text-base font-semibold text-white"}>
-          My Claims
-        </div>
+        
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => refetch()}
