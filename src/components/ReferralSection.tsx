@@ -133,14 +133,22 @@ function SheetPortal({
         role="dialog"
         aria-modal="true"
       >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-5 pt-4 pb-3 border-b border-white/10">
-          <div className="mx-auto -ml-1 h-1 w-12 rounded-full bg-white/20" />
-          <button className="ml-auto p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10" onClick={onClose}>
-            <X className="w-6 h-6" />
-          </button>
+        {/* Header: grabber + centered title + X */}
+        <div className="px-5 pt-4 pb-3 border-b border-white/10">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+            <div className="justify-self-center h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
+            <div className="justify-self-center text-base font-semibold">
+              {title}
+            </div>
+            <button
+              className="justify-self-end p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
-        {title && <div className="px-5 pb-2 text-base font-semibold">{title}</div>}
 
         {/* Body (scrolls when we hit the cap) */}
         <div
@@ -306,7 +314,7 @@ const ReferralSection: React.FC<Props> = ({
             <p className="text-[12px] text-gray-300/90">Invite • Track 15 Levels • Share</p>
           </div>
 
-        {/* Actions */}
+          {/* Actions */}
           <div className="ml-auto flex items-center gap-2">
             {/* Refresh */}
             <button
@@ -630,7 +638,10 @@ function Tabs(props: {
   return (
     <div className="space-y-4">
       {/* Tab header */}
-      <div className="flex gap-2">
+      
+      <div className="mt-3 flex gap-2 overflow-x-auto -mx-5 px-5 pb-1 scroll-px-5 snap-x snap-mandatory">
+
+
         <button onClick={() => setTab("l1")} className={tabBtnCls(tab === "l1")}>
           <LinkIcon className="w-4.5 h-4.5" /> Level 1
         </button>
@@ -807,7 +818,7 @@ function Tabs(props: {
 
 function tabBtnCls(active: boolean) {
   return [
-    "px-3.5 py-2 rounded-xl text-[12px] font-semibold inline-flex items-center gap-2",
+    "px-3.5 py-2 rounded-xl text-[12px] font-semibold inline-flex items-center gap-2 whitespace-nowrap shrink-0 snap-start",
     active ? "bg-white/15 text-white" : "bg-white/8 text-gray-200 hover:bg-white/12",
   ].join(" ");
 }

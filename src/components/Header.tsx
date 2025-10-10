@@ -160,22 +160,23 @@ const BalancesPopover: React.FC<{
           maxHeight: "min(92dvh, calc(100dvh - env(safe-area-inset-top, 0px) - 12px))",
         }}
       >
-        {/* Header with grabber + X */}
-        <div className="px-5 pt-2 pb-3 border-b border-white/10 flex items-center">
-          <div className="mx-auto -ml-1 h-1.5 w-12 rounded-full bg-white/20" aria-hidden="true" />
-          <button
-            onClick={onClose}
-            className="ml-auto p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
-            aria-label="Close balances"
-          >
-            <X className="w-5 h-5" />
-          </button>
+        {/* Header: grabber + centered title + X */}
+        <div className="px-5 pt-2 pb-3 border-b border-white/10">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+            <div className="justify-self-center h-1.5 w-12 rounded-full bg-white/20" aria-hidden="true" />
+            <div className="justify-self-center text-base font-semibold">Balances</div>
+            <button
+              onClick={onClose}
+              className="justify-self-end p-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/10"
+              aria-label="Close balances"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        <div className="px-5">
-          <div className="mb-2 text-[11px] uppercase tracking-wide text-white/60">Balances</div>
-        </div>
 
+        
         <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-4 space-y-2">
           <Row symbol={native.symbol} value={native.value} />
           {rows.map((r) => (

@@ -200,6 +200,11 @@ export default function Dashboard() {
         onOpenSettings={openSettings}
         onOpenWallet={openWallet}
       />
+
+      {/* Keep ReferralSection mounted (but hidden) so its sheets & listeners work from the menu */}
+      <div className="hidden">
+        <ReferralSection hasPreferredBadge={!badgesLoading && hasPreferred} />
+      </div>
     </div>
   );
 }
