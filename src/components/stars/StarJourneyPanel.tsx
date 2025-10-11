@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { gql } from "graphql-request";
 import { useAccount } from "wagmi";
 import { motion, AnimatePresence } from "framer-motion";
 import clsx from "clsx";
 import {
-  Trophy,
   Star,
   Users,
   Crown,
@@ -13,7 +11,7 @@ import {
   CheckCircle2,
   Lock as LockIcon,
 } from "lucide-react";
-import { subgraph } from "@/lib/subgraph";
+import { subgraph, gql } from "@/lib/subgraph";
 
 /* ================= Types ================= */
 type Density = "compact" | "comfortable";
@@ -377,7 +375,6 @@ const StarJourneyPanel: React.FC<Props> = ({
         return await fn();
       } catch (e) {
         if (looksTransient(e)) {
-          // one gentle retry
           await new Promise((r) => setTimeout(r, 450));
           return await fn();
         }
@@ -401,7 +398,7 @@ const StarJourneyPanel: React.FC<Props> = ({
         const res1 = await attempt(() =>
           subgraph.request<{ user: UserStarDataWithRefs | null }>(
             Q_WITH_REFS_FILTER,
-            { id: userId, fromTs: String(fromTs) } // BigInt can be sent as string
+            { id: userId, fromTs: String(fromTs) } // BigInt as string
           )
         );
         if (!live) return;
@@ -409,10 +406,8 @@ const StarJourneyPanel: React.FC<Props> = ({
         setMode("with-filter");
         return;
       } catch (e1: any) {
-        // console debug for developers
         console.debug("[StarPanel] WITH_FILTER failed:", e1);
         if (!looksSchemaError(e1)) {
-          // non-schema error, show it but still try no-filter path
           setErr(String(e1?.response?.errors?.[0]?.message || e1?.message || e1));
         }
       }
@@ -428,7 +423,6 @@ const StarJourneyPanel: React.FC<Props> = ({
         if (!live) return;
         setData(res2.user);
         setMode("with-no-filter");
-        // keep previous err (if any) muted since we recovered
         setErr(null);
         return;
       } catch (e2: any) {
@@ -510,7 +504,6 @@ const StarJourneyPanel: React.FC<Props> = ({
     if (mode === "with-filter") {
       goldenNowCount = refs.length;
     } else {
-      // client window filter
       const windowStart = fromTs;
       goldenNowCount = refs.filter((r) => Number(r.assignedAt) >= windowStart).length;
     }
@@ -565,7 +558,6 @@ const StarJourneyPanel: React.FC<Props> = ({
       <div className={clsx("relative border-b border-white/10", D.pad)}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            
             <span className="text-[11px] px-1.5 py-0.5 rounded bg-white/5 text-slate-300 border border-white/10">
               {uBase.currentStar}-Star
             </span>
@@ -658,7 +650,6 @@ const StarJourneyPanel: React.FC<Props> = ({
             </div>
 
             <div className="flex-1 w-full lg:max-w-[520px]">
-              {/* Golden lifetime stat */}
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-[11px] text-slate-400">Earnings (lifetime):</span>
                 <span className="text-sm font-semibold text-white">
@@ -761,7 +752,6 @@ const StarJourneyPanel: React.FC<Props> = ({
           <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Focus requirement */}
             <div className={clsx("rounded-xl p-4", TONES.card)}>
-              {/* Star lifetime stat */}
               <div className="mb-2 flex items-center gap-2">
                 <span className="text-[11px] text-slate-400">
                   Star Level earnings (lifetime):

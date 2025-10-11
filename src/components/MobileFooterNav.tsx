@@ -29,7 +29,7 @@ const Btn: React.FC<{
       onClick={onClick}
       className={clsx(
         "flex flex-col items-center justify-center gap-1.5 min-w-[60px] rounded-xl relative",
-        "pointer-events-auto", // ensure button gets taps
+        "pointer-events-auto",
         active ? "text-white" : "text-white/70 hover:text-white"
       )}
       aria-label={label}
@@ -65,6 +65,7 @@ const MobileFooterNav: React.FC<Props> = ({
       animate={{ y: 0, opacity: 1 }}
       transition={{ type: "spring", stiffness: 360, damping: 28 }}
       className="
+        mobile-footer-nav
         md:hidden fixed inset-x-0 bottom-0 z-[1000]
         border-t border-white/10
         bg-gradient-to-t from-[#0e1015]/95 via-[#171b22]/90 to-[#0e1015]/95

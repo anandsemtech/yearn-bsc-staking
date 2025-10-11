@@ -9,6 +9,9 @@ import { DataProvider } from "./providers/DataProvider";
 import App from "./App";
 import "./theme.css";
 
+/* ✅ Hard-lock Tailwind dark variants globally */
+document.documentElement.classList.add("dark");
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <DataProvider>

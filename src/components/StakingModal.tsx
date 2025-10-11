@@ -1,9 +1,4 @@
 // src/components/StakingModal.tsx
-// Robust staking modal with badge-gated “pro” controls.
-// - If hasPreferredBadge=false: hide referrer text box, lock composition to [100,0,0], and show only yYearn in allocation.
-// - BEP-20-safe approvals (YY = EXACT amount, SY/PY = MAX), resilient optimistic refresh,
-// - correct 4-arg stake(), multiples/min/balance guards, and bottom-sheet UX on mobile.
-
 import {
   X,
   DollarSign,
@@ -13,9 +8,9 @@ import {
   Plus,
   Check,
   AlertTriangle,
-  Lock as LockIcon,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Address, Hex } from "viem";
 import { parseUnits } from "viem";
 import {
@@ -33,27 +28,17 @@ import {
   showEvmError,
   normalizeEvmError,
 } from "@/lib/errors";
+import { getReferrer } from "@/lib/referrer";
 
-/* ===========================
-   Debug
-=========================== */
 const DBG = false;
 const log = (...a: any[]) => { if (DBG) console.log(...a); };
 
-/* ===========================
-   Tunables
-=========================== */
 const WAIT_CONFIRMATIONS = 1;
 const MAX_UINT256 = 2n ** 256n - 1n;
 const ALLOWANCE_POLL_ATTEMPTS = 8;
 const ALLOWANCE_POLL_DELAY_MS = 450;
-
-// YY approval = EXACT amount
 const APPROVE_YY_MAX = false;
 
-/* ===========================
-   Props
-=========================== */
 interface StakingModalProps {
   package: {
     id: string | number;
@@ -64,27 +49,15 @@ interface StakingModalProps {
     stakeMultiple?: number;
   };
   onClose: () => void;
-
-  /** If true, wallet has the preferred NFT badge and can use advanced features */
   hasPreferredBadge?: boolean;
-
-  // Back-compat (if your Dashboard already passes this)
   hasAdvanced?: boolean;
-
   honoraryItems?: { title: string; imageUrl: string | null; address: `0x${string}` }[];
 }
 
-/* ===========================
-   Env (addresses + static meta)
-=========================== */
 const stakingContract = (import.meta.env.VITE_BASE_CONTRACT_ADDRESS ?? "") as Address;
-
-const yYearn = (import.meta.env.VITE_YYEARN_TOKEN_ADDRESS ||
-  import.meta.env.VITE_YYEARN_ADDRESS || "") as Address;
-const sYearn = (import.meta.env.VITE_SYEARN_TOKEN_ADDRESS ||
-  import.meta.env.VITE_SYEARN_ADDRESS || "") as Address;
-const pYearn = (import.meta.env.VITE_PYEARN_TOKEN_ADDRESS ||
-  import.meta.env.VITE_PYEARN_ADDRESS || "") as Address;
+const yYearn = (import.meta.env.VITE_YYEARN_TOKEN_ADDRESS || import.meta.env.VITE_YYEARN_ADDRESS || "") as Address;
+const sYearn = (import.meta.env.VITE_SYEARN_TOKEN_ADDRESS || import.meta.env.VITE_SYEARN_ADDRESS || "") as Address;
+const pYearn = (import.meta.env.VITE_PYEARN_TOKEN_ADDRESS || import.meta.env.VITE_PYEARN_ADDRESS || "") as Address;
 
 const YY_SYMBOL = import.meta.env.VITE_YYEARN_SYMBOL ?? "yYearn";
 const SY_SYMBOL = import.meta.env.VITE_SYEARN_SYMBOL ?? "sYearn";
@@ -94,13 +67,9 @@ const YY_DEC = Number(import.meta.env.VITE_YYEARN_DECIMALS ?? 18);
 const SY_DEC = Number(import.meta.env.VITE_SYEARN_DECIMALS ?? 18);
 const PY_DEC = Number(import.meta.env.VITE_PYEARN_DECIMALS ?? 18);
 
-// Referral
 const DEFAULT_REFERRER = (import.meta.env.VITE_DEFAULT_REFERRER ||
   "0xD2Dd094539cfF0F279078181E43A47fC9764aC0D") as Address;
 
-/* ===========================
-   Minimal ABIs
-=========================== */
 const ERC20_ABI = [
   { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "approve",   stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
@@ -125,14 +94,11 @@ const STAKING_READS_ABI = [
       { name: "principalLocked", type: "bool" },
     ],
   },
-  // Referral validity helpers
   { type: "function", name: "isWhitelisted", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "userTotalStaked", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "referrerOf", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "address" }] },
 ] as const;
 
-/* ===========================
-   Helpers
-=========================== */
 const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!d))/g, ",");
 const prettyFixed = (v: bigint, decimals: number, places = 2) => {
   const s = v.toString().padStart(decimals + 1, "0");
@@ -176,9 +142,6 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
   }
 }
 
-/* ===========================
-   Component
-=========================== */
 const StakingModal: React.FC<StakingModalProps> = ({
   package: pkg,
   onClose,
@@ -196,18 +159,36 @@ const StakingModal: React.FC<StakingModalProps> = ({
       wagmiPublic ??
       createPublicClient({
         chain: bsc,
-        transport: http(
-          import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"
-        ),
+        transport: http(import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"),
       }),
     [wagmiPublic]
   );
 
-  /* ===========================
-     Chain guard
-  =========================== */
-  const [chainIssue, setChainIssue] = useState<string | null>(null);
+  /* Portal host + scroll lock */
+  const [portalEl, setPortalEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    let el = document.getElementById("staking-modal-root") as HTMLElement | null;
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "staking-modal-root";
+      document.body.appendChild(el);
+    }
+    // hard-lock dark on the portal host
+    el.classList.add("dark");
+    (el.style as any).colorScheme = "dark";
+    setPortalEl(el);
 
+    document.documentElement.classList.add("modal-open", "dark");
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.documentElement.classList.remove("modal-open");
+      document.body.style.overflow = prevOverflow;
+    };
+  }, []);
+
+  /* Chain guard */
+  const [chainIssue, setChainIssue] = useState<string | null>(null);
   useEffect(() => {
     let stop = false;
     if (connectedChainId === bsc.id) {
@@ -224,9 +205,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
         const onBsc = hex?.toLowerCase() === `0x${bsc.id.toString(16)}`.toLowerCase();
         if (!stop) setChainIssue(onBsc ? null : "Please switch your wallet to BSC Mainnet");
       } catch {
-        if (!stop) {
-          setChainIssue(connectedChainId === bsc.id ? null : "Please switch your wallet to BSC Mainnet");
-        }
+        if (!stop) setChainIssue(connectedChainId === bsc.id ? null : "Please switch your wallet to BSC Mainnet");
       }
     })();
     return () => { stop = true; };
@@ -254,13 +233,10 @@ const StakingModal: React.FC<StakingModalProps> = ({
     }
   }
 
-  /* ===========================
-     Compositions
-  =========================== */
+  /* Compositions */
   const { compositions: compRows, isLoading: compLoading, error: compError } =
     useAllowedCompositions();
 
-  // If not preferred, force single option [100,0,0]
   const validCompositions = useMemo<number[][]>(() => {
     if (!preferred) return [[100, 0, 0]];
     const rows = compRows.map((r) => [r.yYearnPct, r.sYearnPct, r.pYearnPct]);
@@ -273,9 +249,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
   }, [validCompositions.length, selectedIdx]);
   const selected = validCompositions[selectedIdx] ?? [100, 0, 0];
 
-  /* ===========================
-     Amount & multiples UX
-  =========================== */
+  /* Amount & multiples */
   const initialAmount = useMemo(() => {
     const m = pkg.stakeMultiple || 0;
     if (!m) return String(Math.max(pkg.minAmount, 0));
@@ -284,7 +258,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
   }, [pkg.minAmount, pkg.stakeMultiple]);
 
   const [amount, setAmount] = useState(initialAmount);
-
   const amountNum = useMemo(() => {
     const n = Number(amount || 0);
     return !isFinite(n) || n < 0 ? 0 : n;
@@ -308,9 +281,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
     if (count <= 0) return;
     setAmount(String(amountNum + mStep * count));
   };
-  const nudgeToNextValid = () => {
-    setAmount(String(amountNum + toNextMultipleDelta));
-  };
+  const nudgeToNextValid = () => setAmount(String(amountNum + toNextMultipleDelta));
   const nudgeToMin = () => {
     const k = Math.ceil(Math.max(min, 0) / mStep);
     setAmount(String(k * mStep));
@@ -322,9 +293,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
     return Number.isFinite(n) ? n : null;
   }, [pkg]);
 
-  /* ===========================
-     Split -> wei using env decimals
-  =========================== */
+  /* Split -> wei */
   const humanPerToken = useMemo<[number, number, number]>(() => {
     const [yy, sy, py] = selected;
     if (yy + sy + py !== 100) return [0, 0, 0];
@@ -338,9 +307,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
   const tokensAll: Address[] = [yYearn, sYearn, pYearn];
   const amtsAll: bigint[]   = [yWei,  sWei,  pWei ];
 
-  /* ===========================
-     Balances (needed for gating)
-  =========================== */
+  /* Balances */
   const [haveWei, setHaveWei] = useState<[bigint, bigint, bigint]>([0n, 0n, 0n]);
   useEffect(() => {
     (async () => {
@@ -352,7 +319,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
           publicClient.readContract({ address: pYearn, abi: ERC20_ABI, functionName: "balanceOf", args: [address] }) as Promise<bigint>,
         ]);
         setHaveWei([by, bs, bp]);
-      } catch (e) {
+      } catch {
         setHaveWei([0n, 0n, 0n]);
       }
     })();
@@ -366,37 +333,83 @@ const StakingModal: React.FC<StakingModalProps> = ({
     (amtsAll[1] <= haveWei[1]) &&
     (amtsAll[2] <= haveWei[2]);
 
-  /* ===========================
-     Referrer UI + validation (badge-gated)
-  =========================== */
+  /* Referrer (badge-gated) */
   const isAddr48 = (a?: string): a is Address => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
+
   const [referrerInput, setReferrerInput] = useState<string>(DEFAULT_REFERRER);
   const [refValid, setRefValid] = useState<boolean | null>(null);
   const [refChecking, setRefChecking] = useState(false);
   const [showFullRef, setShowFullRef] = useState(false);
   const refInputEl = useRef<HTMLInputElement>(null);
 
+  const [existingReferrer, setExistingReferrer] = useState<Address | null>(null);
+  const [refLocked, setRefLocked] = useState(false);
+  const [refLoading, setRefLoading] = useState(false);
+
   async function isReferrerEligible(addr: Address): Promise<boolean> {
     try {
       const [wl, staked] = await Promise.all([
-        publicClient.readContract({
-          address: stakingContract,
-          abi: STAKING_READS_ABI,
-          functionName: "isWhitelisted",
-          args: [addr],
-        }) as Promise<boolean>,
-        publicClient.readContract({
-          address: stakingContract,
-          abi: STAKING_READS_ABI,
-          functionName: "userTotalStaked",
-          args: [addr],
-        }) as Promise<bigint>,
+        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "isWhitelisted", args: [addr] }) as Promise<boolean>,
+        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "userTotalStaked", args: [addr] }) as Promise<bigint>,
       ]);
       return wl || staked > 0n;
     } catch {
-      return true; // accept if contract doesn't expose these
+      return true;
     }
   }
+
+  useEffect(() => {
+    (async () => {
+      if (!address) {
+        setExistingReferrer(null);
+        setRefLocked(false);
+        setRefLoading(false);
+        setReferrerInput(DEFAULT_REFERRER);
+        setRefValid(null);
+        return;
+      }
+      setRefLoading(true);
+      try {
+        const r = await publicClient.readContract({
+          address: stakingContract,
+          abi: STAKING_READS_ABI,
+          functionName: "referrerOf",
+          args: [address],
+        }) as Address;
+
+        const isZero = /^0x0{40}$/i.test(r);
+        if (!isZero) {
+          setExistingReferrer(r);
+          setRefLocked(true);
+          setReferrerInput(r);
+          setRefValid(true);
+          setRefChecking(false);
+        } else {
+          const stored = getReferrer();
+          const candidate = (stored && isAddr48(stored) && !(address && eqAddr(stored, address)))
+            ? stored
+            : DEFAULT_REFERRER;
+          setExistingReferrer(null);
+          setRefLocked(false);
+          setReferrerInput(candidate);
+          setRefValid(null);
+          setRefChecking(false);
+        }
+      } catch {
+        const stored = getReferrer();
+        const candidate = (stored && isAddr48(stored) && !(address && eqAddr(stored, address)))
+          ? stored
+          : DEFAULT_REFERRER;
+        setExistingReferrer(null);
+        setRefLocked(false);
+        setReferrerInput(candidate);
+        setRefValid(null);
+        setRefChecking(false);
+      } finally {
+        setRefLoading(false);
+      }
+    })();
+  }, [address, publicClient]);
 
   useEffect(() => {
     if (!preferred) {
@@ -405,38 +418,32 @@ const StakingModal: React.FC<StakingModalProps> = ({
       setReferrerInput(DEFAULT_REFERRER);
       return;
     }
-    const val = referrerInput?.trim();
-    if (!val) {
-      setRefValid(null);
+    if (refLocked) {
       setRefChecking(false);
+      setRefValid(true);
       return;
     }
-    if (!isAddr48(val)) {
-      setRefValid(false);
-      setRefChecking(false);
-      return;
+    const val = referrerInput?.trim();
+    if (!val) { setRefValid(null); setRefChecking(false); return; }
+    if (!isAddr48(val)) { setRefValid(false); setRefChecking(false); return; }
+    if (address && isAddr48(val) && eqAddr(val, address)) {
+      setRefValid(false); setRefChecking(false); return;
     }
     setRefChecking(true);
     const t = setTimeout(async () => {
-      try {
-        const ok = await isReferrerEligible(val as Address);
-        setRefValid(ok);
-      } finally {
-        setRefChecking(false);
-      }
+      try { setRefValid(await isReferrerEligible(val as Address)); }
+      finally { setRefChecking(false); }
     }, 400);
     return () => clearTimeout(t);
-  }, [referrerInput, preferred]);
+  }, [referrerInput, preferred, refLocked, address]);
 
   function finalReferrer(): Address {
-    if (!preferred) return DEFAULT_REFERRER;
+    if (existingReferrer && !eqAddr(existingReferrer, address)) return existingReferrer;
     const v = (referrerInput || "").trim();
-    return isAddr48(v) && (refValid !== false) ? (v as Address) : DEFAULT_REFERRER;
+    if (address && isAddr48(v) && eqAddr(v, address)) return DEFAULT_REFERRER;
+    return isAddr48(v) ? (v as Address) : DEFAULT_REFERRER;
   }
 
-  /* ===========================
-     Paused & package info
-  =========================== */
   async function isPaused(): Promise<boolean | null> {
     try { return (await publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "paused" })) as boolean; }
     catch { return null; }
@@ -446,9 +453,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     catch { return null; }
   }
 
-  /* ===========================
-     Allowances & approvals
-  =========================== */
   async function readAllowance(owner: Address, token: Address) {
     return (await publicClient.readContract({
       address: token, abi: ERC20_ABI, functionName: "allowance", args: [owner, stakingContract]
@@ -486,11 +490,8 @@ const StakingModal: React.FC<StakingModalProps> = ({
     const delays = [0, 400, 800];
     for (let i = 0; i < delays.length; i++) {
       if (delays[i]) await new Promise(r => setTimeout(r, delays[i]));
-      try {
-        await writeApprove(owner, token, target);
-      } catch (e) {
-        if (i === delays.length - 1) throw e;
-      }
+      try { await writeApprove(owner, token, target); }
+      catch (e) { if (i === delays.length - 1) throw e; }
       let ok = false;
       for (let t = 0; t < ALLOWANCE_POLL_ATTEMPTS; t++) {
         const a = await readAllowance(owner, token);
@@ -512,9 +513,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     }
   }
 
-  /* ===========================
-     Pre-stake validation
-  =========================== */
   function validateEnv(): string | null {
     const isAddr = (a?: string) => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
     if (!isAddr(stakingContract)) return "Invalid staking contract address (env).";
@@ -524,8 +522,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
   }
 
   async function preStakeSanityCheck(finalRef: Address): Promise<string | null> {
-    const envIssue = validateEnv();
-    if (envIssue) return envIssue;
+    const envIssue = validateEnv(); if (envIssue) return envIssue;
     if (!address) return "Connect wallet.";
 
     if (connectedChainId !== bsc.id) {
@@ -559,8 +556,8 @@ const StakingModal: React.FC<StakingModalProps> = ({
     }
 
     if (!finalRef) return "Referrer missing.";
+    if (eqAddr(finalRef, address)) return "Referrer cannot be your own address.";
 
-    // Balance checks (per-token)
     const names = syms;
     const addrs = [yYearn, sYearn, pYearn];
     const needs = [yWei, sWei, pWei];
@@ -572,9 +569,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     return null;
   }
 
-  /* ===========================
-     Stake TX (4 args)
-  =========================== */
   const [stakeTxHash, setStakeTxHash] = useState<Hex | null>(null);
   const [stakeConfirmed, setStakeConfirmed] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
@@ -584,7 +578,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
   async function sendStakeTx(finalRef: Address): Promise<Hex> {
     if (!walletClient || !address) throw new Error("Wallet not ready");
-
     const pid = BigInt(pkg.id as number);
     const call = {
       address: stakingContract,
@@ -594,7 +587,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
       account: address,
       chain: bsc,
     };
-
     let hash: Hex;
     try {
       const sim = await publicClient.simulateContract(call);
@@ -633,9 +625,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     })();
   }, [publicClient, onClose, stakeTxHash, stakeConfirmed]);
 
-  /* ===========================
-     CTA handler
-  =========================== */
   async function handleApproveAndStake() {
     setActionMsg(null);
     try {
@@ -681,16 +670,13 @@ const StakingModal: React.FC<StakingModalProps> = ({
       const sanity = await preStakeSanityCheck(ref);
       if (sanity) throw new Error(sanity);
 
-      // approvals (YY EXACT, SY/PY MAX)
       setIsApproving(true);
       await ensureApprovalBundle(address as Address);
       setIsApproving(false);
 
-      // stake
       setIsStaking(true);
       const hash = await sendStakeTx(ref);
 
-      // optimistic row immediately
       const totalHuman =
         (humanPerToken[0] + humanPerToken[1] + humanPerToken[2])
           .toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -706,8 +692,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
         totalAmountLabel: totalHuman,
         compositionPct: [selected[0], selected[1], selected[2]],
         referrer: ref,
-
-        // Bits that fix the card:
         aprPct: (pkgRules.aprBps ?? 0) / 100,
         pkgRules,
         nextClaimAt,
@@ -722,9 +706,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     }
   }
 
-  /* ===========================
-     UI state
-  =========================== */
   const projectedEarnings = amountNum * (pkg.apy / 100);
   const mainDisabled =
     isApproving || isStaking || !!stakeTxHash || !address ||
@@ -740,305 +721,312 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
   const formatWei = (wei: bigint, dec: number) => prettyFixed(wei, dec, 2);
 
-  /* ===========================
-     Render
-  =========================== */
-  return (
-    /* Backdrop */
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center
-                bg-black/60 backdrop-blur-sm overscroll-contain">
-      {/* Dialog (bottom sheet on mobile, centered on ≥sm) */}
-      <div
-        className="bg-white dark:bg-gray-900 w-full max-w-full sm:max-w-2xl
-             rounded-t-2xl sm:rounded-2xl shadow-2xl
-             h-[88vh] supports-[height:100dvh]:h-[88dvh]
-             flex flex-col overflow-hidden"
-      >
-        {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
-                        border-b border-gray-200/60 dark:border-white/10
-                        bg-white/90 dark:bg-gray-900/90 backdrop-blur">
-          <h2 className="text-lg sm:text-xl font-semibold text-gray-900 dark:text-white">
-            Stake {pkg.name}
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+  if (!portalEl) return null;
 
-        {/* Body */}
-        <div
-          className="flex-1 min-h-0 overflow-y-auto touch-pan-y overscroll-contain
-             px-5 sm:px-6 py-4 sm:py-5 space-y-5"
-        >
-          {/* Summary */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl p-3 sm:p-4 bg-gradient-to-br from-violet-50 to-indigo-50 dark:from-violet-900/20 dark:to-indigo-900/20 border border-violet-100 dark:border-white/10">
-              <div className="flex items-center gap-2 text-sm">
-                <Calendar className="w-4 h-4 shrink-0 text-violet-500" />
-                <span className="text-gray-600 dark:text-gray-400">Duration</span>
-                <span className="ml-auto font-medium text-gray-900 dark:text-white">
-                  {pkg.durationYears} {pkg.durationYears === 1 ? "Year" : "Years"}
-                </span>
+  return createPortal(
+    (
+      <div className="dark">
+        {/* Backdrop */}
+        <div className="fixed inset-0 z-[120] flex items-end sm:items-center justify-center
+                        bg-black/60 backdrop-blur-sm overscroll-contain">
+
+          {/* Dialog */}
+          <div className="bg-gray-900 w-full max-w-full sm:max-w-2xl
+                          rounded-t-2xl sm:rounded-2xl shadow-2xl
+                          h-[88vh] supports-[height:100dvh]:h-[88dvh]
+                          flex flex-col overflow-hidden text-gray-100">
+
+            {/* Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 sm:px-6 py-3
+                            border-b border-white/10 bg-gray-900/90 backdrop-blur">
+              <h2 className="text-lg sm:text-xl font-semibold">
+                Stake {pkg.name}
+              </h2>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 min-h-0 overflow-y-auto touch-pan-y overscroll-contain
+                            px-5 sm:px-6 py-4 sm:py-5 space-y-5">
+
+              {/* Summary */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl p-3 sm:p-4 border border-white/10 bg-white/5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Calendar className="w-4 h-4 shrink-0 text-violet-400" />
+                    <span className="text-gray-400">Duration</span>
+                    <span className="ml-auto font-medium">
+                      {pkg.durationYears} {pkg.durationYears === 1 ? "Year" : "Years"}
+                    </span>
+                  </div>
+                </div>
+                <div className="rounded-xl p-3 sm:p-4 border border-white/10 bg-white/5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <TrendingUp className="w-4 h-4 shrink-0 text-emerald-400" />
+                    <span className="text-gray-400">APY</span>
+                    <span className="ml-auto font-medium text-emerald-400">{pkg.apy}%</span>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="rounded-xl p-3 sm:p-4 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20 border border-emerald-100 dark:border-white/10">
-              <div className="flex items-center gap-2 text-sm">
-                <TrendingUp className="w-4 h-4 shrink-0 text-emerald-600" />
-                <span className="text-gray-600 dark:text-gray-400">APY</span>
-                <span className="ml-auto font-medium text-emerald-700 dark:text-emerald-400">{pkg.apy}%</span>
-              </div>
-            </div>
-          </div>
 
-          {/* Amount + Multiples */}
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-800 dark:text-gray-200">Stake Amount</label>
-            <div className="relative">
-              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                min={min}
-                step={mStep}
-                inputMode="decimal"
-                className={`w-full pl-11 pr-4 py-3 rounded-xl border text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:ring-2 focus:border-transparent
-                  ${(!isMultipleOk && mStep > 1) || !meetsMin
-                    ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-300 dark:border-rose-700 focus:ring-rose-500"
-                    : "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-white/10 focus:ring-violet-500"}`}
-                aria-invalid={(!isMultipleOk && mStep > 1) || !meetsMin}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Minimum: {prettyUSD(min)}
-                {mStep > 1 ? ` • Multiples of ${prettyUSD(mStep)}` : ""}
-              </p>
-
-              <div className="flex flex-wrap items-center gap-2.5">
-                {mStep > 1 && !isMultipleOk && (
-                  <button
-                    type="button"
-                    onClick={nudgeToNextValid}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
-                               bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200 hover:opacity-90"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Fix +{toNextMultipleDelta}
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => bumpByMultiples(1)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
-                             bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200 hover:opacity-90"
-                >
-                  <Plus className="w-3 h-3" />
-                  +1×
-                </button>
-                <button
-                  type="button"
-                  onClick={() => bumpByMultiples(5)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
-                             bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200 hover:opacity-90"
-                >
-                  <Plus className="w-3 h-3" />
-                  +5×
-                </button>
-                <button
-                  type="button"
-                  onClick={nudgeToMin}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
-                             bg-gray-100 text-gray-800 dark:bg-white/10 dark:text-gray-200 hover:opacity-90"
-                >
-                  Set to Min
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Referrer (only for preferred wallets) */}
-          {preferred ? (
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-800 dark:text-gray-200">Referrer Address</label>
-              <div className="relative flex items-center gap-2">
-                <div
-                  className={`absolute inset-y-0 left-0 flex items-center px-3 font-mono text-gray-800 dark:text-gray-100 transition-opacity
-                  ${showFullRef ? "opacity-0 pointer-events-none" : "opacity-100"}`}
-                  style={{ whiteSpace: "nowrap" }}
-                >
-                  {isAddr48(referrerInput)
-                    ? `${referrerInput.slice(0, 6)}...${referrerInput.slice(-6)}`
-                    : referrerInput || DEFAULT_REFERRER}
+              {/* Amount + Multiples */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium">Stake Amount</label>
+                <div className="relative">
+                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <input
+                    type="number"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    min={min}
+                    step={mStep}
+                    inputMode="decimal"
+                    className={`w-full pl-11 pr-4 py-3 rounded-xl border text-gray-100 placeholder:text-gray-400 focus:ring-2 focus:border-transparent
+                    ${(!isMultipleOk && mStep > 1) || !meetsMin
+                      ? "bg-rose-900/20 border-rose-700 focus:ring-rose-500"
+                      : "bg-gray-800 border-white/10 focus:ring-violet-500"}`}
+                    aria-invalid={(!isMultipleOk && mStep > 1) || !meetsMin}
+                  />
                 </div>
 
-                <input
-                  ref={refInputEl}
-                  type="text"
-                  value={referrerInput}
-                  onChange={(e) => { setReferrerInput(e.target.value.trim()); setRefValid(null); }}
-                  onFocus={() => {
-                    setShowFullRef(true);
-                    requestAnimationFrame(() => {
-                      if (refInputEl.current) {
-                        refInputEl.current.scrollLeft = refInputEl.current.scrollWidth;
-                      }
-                    });
-                  }}
-                  onBlur={() => setShowFullRef(false)}
-                  placeholder={DEFAULT_REFERRER}
-                  className={`w-full px-3 py-3 rounded-xl border font-mono focus:ring-2 focus:border-transparent
-                  ${refValid === false ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-300 dark:border-rose-700 focus:ring-rose-500"
-                                       : "bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-white/10 focus:ring-violet-500"}
-                  ${showFullRef ? "text-gray-900 dark:text-gray-100" : "text-transparent caret-gray-900 dark:caret-white"}`}
-                  style={{ whiteSpace: "nowrap", overflowX: "auto", overflowY: "hidden" }}
-                />
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs text-gray-400">
+                    Minimum: {prettyUSD(min)}
+                    {mStep > 1 ? ` • Multiples of ${prettyUSD(mStep)}` : ""}
+                  </p>
 
-                {refChecking && <div className="w-4 h-4 border-2 border-gray-600 border-t-transparent rounded-full animate-spin" />}
-                {refValid === true && !refChecking && <Check className="w-5 h-5 text-emerald-500" />}
-                {refValid === false && !refChecking && <AlertTriangle className="w-5 h-5 text-rose-500" />}
-              </div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {mStep > 1 && !isMultipleOk && (
+                      <button
+                        type="button"
+                        onClick={nudgeToNextValid}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                                   bg-rose-900/40 text-rose-200 hover:opacity-90"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Fix +{toNextMultipleDelta}
+                      </button>
+                    )}
 
-              {refValid === false && (
-                <p className="text-xs text-rose-600 dark:text-rose-400">
-                  Referrer is not eligible (must be whitelisted or have staked before).
-                </p>
-              )}
-            </div>
-          ) : null}
-
-          {/* Composition (only for preferred wallets) */}
-          {preferred && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-                  Choose a composition
-                </h4>
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`}
-                </span>
-              </div>
-
-              <div
-                className="grid grid-template gap-2.5"
-                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}
-              >
-                {validCompositions.map((c, i) => {
-                  const active = i === selectedIdx;
-                  return (
                     <button
-                      key={`${c.join("-")}-${i}`}
-                      onClick={() => setSelectedIdx(i)}
-                      className={`px-3.5 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
-                        active
-                          ? "bg-violet-600 text-white border-violet-600 shadow-sm"
-                          : "bg-white/60 dark:bg-white/5 text-gray-800 dark:text-gray-200 border-gray-300/60 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/10"
-                      }`}
+                      type="button"
+                      onClick={() => bumpByMultiples(1)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                                 bg-violet-900/40 text-violet-200 hover:opacity-90"
                     >
-                      [{c.join(", ")}]
+                      <Plus className="w-3 h-3" />
+                      +1×
                     </button>
-                  );
-                })}
+                    <button
+                      type="button"
+                      onClick={() => bumpByMultiples(5)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                                 bg-indigo-900/40 text-indigo-200 hover:opacity-90"
+                    >
+                      <Plus className="w-3 h-3" />
+                      +5×
+                    </button>
+                    <button
+                      type="button"
+                      onClick={nudgeToMin}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                                 bg-white/10 text-gray-200 hover:opacity-90"
+                    >
+                      Set to Min
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Referrer (only for preferred wallets) */}
+              {preferred ? (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Referrer Address</label>
+                  <div className="relative flex items-center gap-2">
+                    <div
+                      className={`absolute inset-y-0 left-0 flex items-center px-3 font-mono text-gray-100 transition-opacity
+                      ${showFullRef ? "opacity-0 pointer-events-none" : "opacity-100"}`}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      {isAddr48(referrerInput)
+                        ? `${referrerInput.slice(0, 6)}...${referrerInput.slice(-6)}`
+                        : referrerInput || DEFAULT_REFERRER}
+                    </div>
+
+                    <input
+                      ref={refInputEl}
+                      type="text"
+                      value={referrerInput}
+                      disabled={refLocked || refLoading}
+                      onChange={(e) => { setReferrerInput(e.target.value.trim()); setRefValid(null); }}
+                      onFocus={() => {
+                        setShowFullRef(true);
+                        requestAnimationFrame(() => {
+                          if (refInputEl.current) {
+                            refInputEl.current.scrollLeft = refInputEl.current.scrollWidth;
+                          }
+                        });
+                      }}
+                      onBlur={() => setShowFullRef(false)}
+                      placeholder={DEFAULT_REFERRER}
+                      className={`w-full px-3 py-3 rounded-xl border font-mono focus:ring-2 focus:border-transparent
+                      ${refValid === false ? "bg-rose-900/20 border-rose-700 focus:ring-rose-500"
+                                           : "bg-gray-800 border-white/10 focus:ring-violet-500"}
+                      ${showFullRef ? "text-gray-100" : "text-transparent caret-white"}`}
+                      style={{ whiteSpace: "nowrap", overflowX: "auto", overflowY: "hidden" }}
+                    />
+
+                    {(refChecking || refLoading) && <div className="w-4 h-4 border-2 border-gray-300 border-t-transparent rounded-full animate-spin" />}
+                    {refValid === true && !refChecking && !refLoading && <Check className="w-5 h-5 text-emerald-400" />}
+                    {refValid === false && !refChecking && !refLoading && <AlertTriangle className="w-5 h-5 text-rose-400" />}
+                  </div>
+
+                  {refValid === false && (
+                    <p className="text-xs text-rose-400">
+                      {address && isAddr48(referrerInput) && eqAddr(referrerInput, address)
+                        ? "Referrer cannot be your own address."
+                        : "Referrer is not eligible (must be whitelisted or have staked before)."}
+                    </p>
+                  )}
+                  {refLocked && existingReferrer && (
+                    <p className="text-xs text-gray-400">
+                      Your referrer is set on-chain and cannot be changed.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+
+              {/* Composition (only for preferred wallets) */}
+              {preferred && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold">Choose a composition</h4>
+                    <span className="text-xs text-gray-400">
+                      {compLoading ? "Loading…" : compError ? "Failed to load" : `${validCompositions.length} options`}
+                    </span>
+                  </div>
+
+                  <div
+                    className="grid grid-template gap-2.5"
+                    style={{ gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))" }}
+                  >
+                    {validCompositions.map((c, i) => {
+                      const active = i === selectedIdx;
+                      return (
+                        <button
+                          key={`${c.join("-")}-${i}`}
+                          onClick={() => setSelectedIdx(i)}
+                          className={`px-3.5 py-2 rounded-2xl border text-sm transition-all touch-manipulation ${
+                            active
+                              ? "bg-violet-600 text-white border-violet-600 shadow-sm"
+                              : "bg-white/5 text-gray-200 border-white/10 hover:bg-white/10"
+                          }`}
+                        >
+                          [{c.join(", ")}]
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Allocation */}
+              <div className="rounded-xl p-4 bg-gray-800 border border-white/10">
+                <h3 className="text-sm font-medium mb-3">Allocation</h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {[
+                    { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0], show: true },
+                    { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1], show: preferred },
+                    { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2], show: preferred },
+                  ].filter(r => r.show).map((r) => {
+                    const lacking = r.need > r.have;
+                    return (
+                      <div
+                        key={r.label}
+                        className={`rounded-lg px-3 py-2 border min-w-0
+                          ${lacking
+                            ? "bg-rose-900/20 border-rose-900/40"
+                            : "bg-white/5 border-white/10"}`}
+                      >
+                        <div className="text-[11px] uppercase tracking-wide text-gray-400">{r.label}</div>
+
+                        <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
+                          <div className="shrink-0 text-[11px] text-gray-400">Need</div>
+                          <div
+                            className="ml-auto font-semibold truncate text-[clamp(12px,3.7vw,14px)]"
+                            title={`Need ${formatWei(r.need ?? 0n, r.dec)}`}
+                          >
+                            {formatWei(r.need ?? 0n, r.dec)}
+                          </div>
+                        </div>
+
+                        <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
+                          <div className="shrink-0 text-[11px] text-gray-400">Have</div>
+                          <div
+                            className="ml-auto font-medium truncate text-[clamp(11px,3.5vw,13px)]"
+                            title={`Have ${formatWei(r.have, r.dec)}`}
+                          >
+                            {formatWei(r.have, r.dec)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {!hasSufficientBalances && (
+                  <p className="mt-3 text-xs text-rose-400">
+                    Insufficient balance for the selected allocation.
+                  </p>
+                )}
+              </div>
+
+              {/* Earnings */}
+              <div className="rounded-xl p-4 bg-gray-800 border border-white/10">
+                <h3 className="text-sm font-medium mb-1">Projected Annual Earnings</h3>
+                <div className="text-2xl font-bold text-emerald-400">
+                  {prettyUSD(projectedEarnings)}
+                </div>
+                <p className="text-xs text-gray-400">Based on {pkg.apy}% APY</p>
+              </div>
+
+              {chainIssue && <div className="text-xs text-amber-400">{chainIssue}</div>}
+              {actionMsg && <div className="text-sm text-rose-400">{actionMsg}</div>}
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 z-10 p-4 sm:p-5 bg-gray-900/90 backdrop-blur
+                            border-t border-white/10
+                            pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={handleApproveAndStake}
+                  disabled={mainDisabled}
+                  className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold transition-all ${
+                    mainDisabled
+                      ? "bg-gradient-to-r from-violet-900/30 to-indigo-900/30 text-gray-400 cursor-not-allowed"
+                      : "bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white shadow-sm"}`}
+                >
+                  {isApproving || isStaking || !!stakeTxHash ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (<Zap className="w-4 h-4" />)}
+                  <span>{mainBtnText}</span>
+                </button>
               </div>
             </div>
-          )}
 
-
-          {/* Allocation */}
-          <div className="rounded-xl p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-3">Allocation</h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {[
-                { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0], show: true },
-                { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1], show: preferred }, // hide if !preferred
-                { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2], show: preferred }, // hide if !preferred
-              ].filter(r => r.show).map((r) => {
-                const lacking = r.need > r.have;
-                return (
-                  <div
-                    key={r.label}
-                    className={`rounded-lg px-3 py-2 border min-w-0
-                      ${lacking
-                        ? "bg-rose-50/60 dark:bg-rose-900/20 border-rose-200/60 dark:border-rose-900/40"
-                        : "bg-white dark:bg-white/5 border-gray-200 dark:border-white/10"}`}
-                  >
-                    <div className="text-[11px] uppercase tracking-wide text-gray-500">{r.label}</div>
-
-                    <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
-                      <div className="shrink-0 text-[11px] text-gray-500">Need</div>
-                      <div
-                        className="ml-auto font-semibold text-gray-900 dark:text-white truncate
-                                   text-[clamp(12px,3.7vw,14px)]"
-                        title={`Need ${formatWei(r.need ?? 0n, r.dec)}`}
-                      >
-                        {formatWei(r.need ?? 0n, r.dec)}
-                      </div>
-                    </div>
-
-                    <div className="mt-0.5 flex items-baseline justify-between gap-2 min-w-0 font-variant-numeric tabular-nums">
-                      <div className="shrink-0 text-[11px] text-gray-500">Have</div>
-                      <div
-                        className="ml-auto font-medium truncate text-[clamp(11px,3.5vw,13px)]"
-                        title={`Have ${formatWei(r.have, r.dec)}`}
-                      >
-                        {formatWei(r.have, r.dec)}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {!hasSufficientBalances && (
-              <p className="mt-3 text-xs text-rose-600 dark:text-rose-400">
-                Insufficient balance for the selected allocation.
-              </p>
-            )}
-          </div>
-
-          {/* Earnings */}
-          <div className="rounded-xl p-4 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10">
-            <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">Projected Annual Earnings</h3>
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-              {prettyUSD(projectedEarnings)}
-            </div>
-            <p className="text-xs text-gray-600 dark:text-gray-400">Based on {pkg.apy}% APY</p>
-          </div>
-
-          {chainIssue && <div className="text-xs text-amber-600 dark:text-amber-400">{chainIssue}</div>}
-          {actionMsg && <div className="text-sm text-rose-500">{actionMsg}</div>}
-        </div>
-
-        {/* Footer */}
-        <div className="sticky bottom-0 z-10 p-4 sm:p-5 bg-white/90 dark:bg-gray-900/90 backdrop-blur
-                        border-t border-gray-200/60 dark:border-white/10
-                        pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={handleApproveAndStake}
-              disabled={mainDisabled}
-              className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold transition-all ${
-                mainDisabled
-                  ? "bg-gradient-to-r from-violet-900/30 to-indigo-900/30 text-gray-400 cursor-not-allowed"
-                  : "bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white shadow-sm"}`}
-            >
-              {isApproving || isStaking || !!stakeTxHash ? (
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (<Zap className="w-4 h-4" />)}
-              <span>{mainBtnText}</span>
-            </button>
           </div>
         </div>
       </div>
-    </div>
+    ),
+    portalEl
   );
 };
 

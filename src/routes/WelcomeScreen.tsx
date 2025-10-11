@@ -3,6 +3,8 @@ import {
   Hexagon, Triangle, Circle, Diamond, Brain, Cpu, Network, Bot
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { captureReferrerFromLocation } from "@/lib/referrer";
+
 
 const WelcomeScreen: React.FC = () => {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
@@ -10,6 +12,7 @@ const WelcomeScreen: React.FC = () => {
   const [time, setTime] = useState(0);
 
   useEffect(() => {
+    captureReferrerFromLocation(); // <<— stores ?ref=... if present
     setIsLoaded(true);
     const handleMouseMove = (e: MouseEvent) => setMousePosition({ x: e.clientX, y: e.clientY });
     const timer = setInterval(() => setTime((prev) => prev + 1), 100);

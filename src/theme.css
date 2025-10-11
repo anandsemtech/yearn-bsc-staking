@@ -93,3 +93,30 @@
   /* Scroll behavior inside sheets */
   .sheet-scroll { overflow-y: auto; overscroll-behavior: contain; }
 }
+
+/* Keep Tailwind dark variants active and use dark UA styling */
+@layer base {
+  html { color-scheme: dark; }
+  html.dark body { background: var(--yt-bg); }
+}
+
+/* When modal is open, put the app into a sheet-friendly state */
+@layer utilities {
+  html.modal-open body {
+    touch-action: none;
+  }
+
+  /* Hide/slide the mobile footer while the staking modal is open. */
+  html.modal-open .mobile-footer-nav {
+    opacity: 0;
+    transform: translateY(100%);
+    pointer-events: none;
+    transition: transform .25s ease, opacity .2s ease;
+  }
+
+  /* Make sure the modal sits above anything else */
+  .z-modal { z-index: 120; }
+}
+
+/* Footer z baseline (modal uses 120) */
+.mobile-footer-nav { z-index: 80; }

@@ -258,9 +258,10 @@ const ReferralSection: React.FC<Props> = ({
 
   // SSR-safe link
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const link = origin && address ? `${origin}/ref/${address}` : "";
+  const link = origin && address ? `${origin}?ref=${address}` : "";
 
-  const [copied, setCopied] = useState(false);
+  // (was: copied state) — removed as we now use icon-only component per control
+
   const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
   const [claimsOpen, setClaimsOpen] = useState(false);  // My Claims (responsive)
 
@@ -362,16 +363,11 @@ const ReferralSection: React.FC<Props> = ({
               Share Link
             </div>
             <div className="flex items-center gap-2 rounded-xl bg-white/8 px-2.5 py-2 ring-1 ring-white/10">
-              <span className="text-[12px] text-gray-100/90 font-mono truncate flex-1">
+              <span className="text-[12px] text-gray-100/90 font-mono truncate flex-1" title={link || "—"}>
                 {link || "—"}
               </span>
-              <button
-                onClick={async () => { const ok = await copy(link); setCopied(ok); setTimeout(() => setCopied(false), 1200); }}
-                className="shrink-0 inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-[12px] font-semibold bg-gradient-to-r from-purple-500 to-blue-600 text-white"
-              >
-                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                {copied ? "Copied" : "Copy"}
-              </button>
+              {/* Icon-only copy with feedback */}
+              <CopyIconButton text={link} />
             </div>
           </div>
 
@@ -604,6 +600,74 @@ function Tile({ icon, label, value }: { icon: React.ReactNode; label: string; va
   );
 }
 
+/* ===== Icon-only copy with instant feedback ===== */
+function CopyIconButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [hover, setHover] = useState(false);
+
+  async function doCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      // haptics on supported devices
+      if (navigator.vibrate) navigator.vibrate(10);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand?.("copy");
+      document.body.removeChild(ta);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }
+  }
+
+  return (
+    <div
+      className={`relative inline-flex ${className || ""}`}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <button
+        type="button"
+        onClick={doCopy}
+        aria-label={copied ? "Copied!" : "Copy to clipboard"}
+        className={[
+          "group rounded-xl p-2 ring-1 ring-white/10 bg-white/10 hover:bg-white/15",
+          "text-white transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400",
+        ].join(" ")}
+      >
+        <span className="inline-flex items-center justify-center w-5 h-5">
+          {copied ? (
+            <Check className="w-5 h-5 text-emerald-300" />
+          ) : (
+            <Copy className="w-5 h-5" />
+          )}
+        </span>
+      </button>
+
+      {(hover || copied) && (
+        <div
+          className={[
+            "absolute -top-7 right-0 px-2 py-1 rounded-md text-[11px] leading-none",
+            "bg-black/70 text-white backdrop-blur ring-1 ring-white/10",
+            "pointer-events-none select-none",
+          ].join(" ")}
+          role="status"
+          aria-live="polite"
+        >
+          {copied ? "Copied!" : "Copy"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ============================================================
    Tabs (mobile sheet content)
 ============================================================ */
@@ -659,13 +723,9 @@ function Tabs(props: {
           <div className="px-4 py-3 border-b border-white/10">
             <div className="text-[12px] text-gray-300/90 mb-1">Share Link</div>
             <div className="flex items-center gap-2 rounded-xl bg-white/8 px-3 py-2 ring-1 ring-white/10">
-              <span className="text-[12px] text-gray-100 font-mono truncate">{link}</span>
-              <button
-                onClick={() => copy(link)}
-                className="shrink-0 inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-[12px] font-semibold bg-gradient-to-r from-purple-500 to-blue-600 text-white"
-              >
-                <Copy className="w-4 h-4" /> Copy
-              </button>
+              <span className="text-[12px] text-gray-100 font-mono truncate" title={link}>{link}</span>
+              {/* Icon-only copy with feedback */}
+              <CopyIconButton text={link} />
             </div>
           </div>
           <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">

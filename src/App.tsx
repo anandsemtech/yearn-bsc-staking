@@ -1,5 +1,5 @@
 // src/App.tsx
-import React from "react";
+import React, { useEffect } from "react";
 import {
   Navigate,
   Outlet,
@@ -13,6 +13,15 @@ import Welcome from "./routes/WelcomeScreen";
 import Dashboard from "./routes/Dashboard";
 import Header from "@/components/Header";
 import ToastHub from "@/components/ui/ToastHub";
+import { captureReferrerFromLocation } from "@/lib/referrer";
+
+/** One-time global capture of ?ref=0x... on initial mount */
+function RefCaptureOnce() {
+  useEffect(() => {
+    captureReferrerFromLocation();
+  }, []);
+  return null;
+}
 
 /** Small gate so we don't redirect during SSR/first paint */
 function useHydrated() {
@@ -51,6 +60,9 @@ function Shell() {
   const showHeader = pathname !== "/"; // no header on the welcome page
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
+      {/* Global once-per-app ref capture */}
+      <RefCaptureOnce />
+
       {showHeader && <Header />}
       <main>
         <Outlet />
