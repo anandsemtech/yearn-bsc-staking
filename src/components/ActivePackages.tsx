@@ -230,17 +230,40 @@ const ActivePackages: React.FC<Props> = ({
     function prune() {
       setOptimisticRows((prev) => {
         if (!prev.length) return prev;
+
+        // exact matches (old behavior)
         const propKeys = new Set(
           rows.map((r) =>
             r.txHash ? `tx:${r.txHash}` : `pkg:${r.packageId}:start:${r.startDate?.getTime?.() ?? 0}`
           )
         );
+
+        // fuzzy map (same package, start within ±2h)
+        const propSimple = rows.map((r) => ({
+          pid: r.packageId,
+          t: r.startDate?.getTime?.() ?? 0,
+        }));
+        const FUZZ = 2 * 60 * 60 * 1000;
+
         return prev.filter((o) => {
-          const ok = o.txHash ? `tx:${o.txHash}` : `pkg:${o.packageId}:start:${o.startTs}`;
-          return !propKeys.has(ok);
+          const key = o.txHash
+            ? `tx:${o.txHash}`
+            : `pkg:${o.packageId}:start:${o.startTs}`;
+
+          if (propKeys.has(key)) return false;
+
+          const oStart = (o.startTs ? o.startTs * 1000 : o.startDate?.getTime?.() ?? 0);
+          const fuzzyHit = propSimple.some((p) => p.pid === o.packageId && Math.abs(p.t - oStart) <= FUZZ);
+          if (fuzzyHit) return false;
+
+          return true;
         });
       });
     }
+
+
+
+
     const refreshNames = ["staking:updated", "active-packages:refresh", "stakes:changed", "staked"];
     refreshNames.forEach((n) => window.addEventListener(n, prune as EventListener));
 
@@ -328,6 +351,18 @@ const ActivePackages: React.FC<Props> = ({
       } catch {}
     };
   }, [publicClient, debouncedRefresh, onRefresh]);
+
+  // While optimistic rows exist, gently poll to force a refresh (subgraph catch-up)
+  useEffect(() => {
+    if (!onRefresh) return;
+    if (optimisticRows.length === 0) return;
+
+    const id = window.setInterval(() => {
+      onRefresh();
+    }, 10_000); // every 10s while an optimistic row exists
+
+    return () => window.clearInterval(id);
+  }, [optimisticRows.length, onRefresh]);
 
   /* ----------------------------- Per-row UI state ------------------------------ */
   const [busyByRow, setBusyByRow] = useState<Record<string, "claim" | "unstake" | undefined>>({});
@@ -632,40 +667,41 @@ const ActivePackages: React.FC<Props> = ({
                       {fmtDateTimeSeconds(r.startDate)}
                     </td>
                     <td className="px-5 py-4">
-                      {r.status === "Pending"
-                        ? renderPendingInfo(r)
-                        : (
-                          <div className="flex items-center gap-2 text-white/60">
-                            <span>●</span>
-                            <span>{fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}</span>
+                     {isOpt
+                      ? renderPendingInfo(r)
+                      : (
+                        <div className="flex items-center gap-2 text-white/60">
+                          <span>●</span>
+                          <span>{fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}</span>
+                        </div>
+                      )}
 
-                          </div>
-                        )}
                     </td>
-                    <td className="px-5 py-4">
-                      <span
-                        className={
-                          "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ring-1 " +
-                          (r.status === "Active"
-                            ? "bg-emerald-500/10 text-emerald-300 ring-emerald-400/20"
-                            : r.status === "Pending"
-                            ? "bg-white/10 text-white/70 ring-white/20"
-                            : "bg-white/10 text-white/60 ring-white/15")
-                        }
-                      >
-                        <span
-                          className={
-                            "h-1.5 w-1.5 rounded-full " +
-                            (r.status === "Active"
-                              ? "bg-emerald-400"
-                              : r.status === "Pending"
-                              ? "bg-white/50"
-                              : "bg-white/30")
-                          }
-                        />
-                        {r.status.toLowerCase()}
-                      </span>
-                    </td>
+                <td className="px-5 py-4">
+                  <span
+                    className={
+                      "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ring-1 " +
+                      (isOpt || r.status === "Pending"
+                        ? "bg-white/10 text-white/70 ring-white/20"
+                        : r.status === "Active"
+                        ? "bg-emerald-500/10 text-emerald-300 ring-emerald-400/20"
+                        : "bg-white/10 text-white/60 ring-white/15")
+                    }
+                  >
+                    <span
+                      className={
+                        "h-1.5 w-1.5 rounded-full " +
+                        (isOpt || r.status === "Pending"
+                          ? "bg-white/50"
+                          : r.status === "Active"
+                          ? "bg-emerald-400"
+                          : "bg-white/30")
+                      }
+                    />
+                    {isOpt ? "pending" : r.status.toLowerCase()}
+                  </span>
+                </td>
+
                     <td className="px-5 py-4">
                       <div className="flex gap-2">
                         <button
@@ -782,23 +818,24 @@ const ActivePackages: React.FC<Props> = ({
                   {r.packageName}{r.optimistic ? " (pending)" : ""}
                 </div>
                 <div className="flex items-center gap-1 text-xs">
-                  {r.status === "Pending" ? (
-                    <>
-                      <span className="h-2.5 w-2.5 rounded-full bg-white/50 inline-block" />
-                      <span className="text-white/70">Indexing…</span>
-                      <span className="text-white/50">({elapsed}s)</span>
-                    </>
-                  ) : !isOpt && availableBase ? (
-                    <>
-                      <PulseDot />
-                      <span className="text-emerald-400">Available now</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="h-2.5 w-2.5 rounded-full bg-white/35 inline-block" />
-                      <span className="text-white/50">Locked</span>
-                    </>
-                  )}
+                  {isOpt ? (
+                      <>
+                        <span className="h-2.5 w-2.5 rounded-full bg-white/50 inline-block" />
+                        <span className="text-white/70">Indexing…</span>
+                        <span className="text-white/50">({elapsed}s)</span>
+                      </>
+                    ) : availableBase ? (
+                      <>
+                        <PulseDot />
+                        <span className="text-emerald-400">Available now</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="h-2.5 w-2.5 rounded-full bg-white/35 inline-block" />
+                        <span className="text-white/50">Locked</span>
+                      </>
+                    )}
+
                 </div>
               </div>
 
