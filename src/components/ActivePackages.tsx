@@ -7,6 +7,8 @@ import LoadingActiveStakes from "./LoadingActiveStakes";
 import { STAKING_ABI } from "@/web3/abi/stakingAbi";
 import { explainTxError, normalizeEvmError, showUserSuccess } from "@/lib/errors";
 import { motion, AnimatePresence } from "framer-motion";
+import { useOnline } from "@/hooks/useOnline";
+
 
 /* ----------------------------------------------------------------------------------
    Types (public row shape)
@@ -334,6 +336,10 @@ const ActivePackages: React.FC<Props> = ({
   const [optUnstakedByRow, setOptUnstakedByRow] = useState<Record<string, boolean | undefined>>({});
   const [flashByRow, setFlashByRow] = useState<Record<string, "claim" | "unstake" | undefined>>({});
 
+  const online = useOnline();
+  const anyPending = mergedRows.some((r) => r.status === "Pending");
+
+
   const setBusy = (stakeIndex: string, mode?: "claim" | "unstake") =>
     setBusyByRow((m) => ({ ...m, [stakeIndex]: mode }));
   const setErr = (stakeIndex: string, msg?: string) =>
@@ -348,6 +354,20 @@ const ActivePackages: React.FC<Props> = ({
 
   /* --------------------------------- Actions ---------------------------------- */
   async function claim(stakeIndex: string, pkg?: ActivePackageRow["pkgRules"]) {
+
+    if (busyByRow[stakeIndex]) return;
+    // Early guards to prevent user panic / broken flows
+    if (anyPending) {
+      setErr(stakeIndex, "Your recent stake is indexing on the subgraph (~2 min). Actions are temporarily disabled.");
+      setTimeout(() => setErr(stakeIndex, undefined), 6000);
+      return;
+    }
+    if (!online) {
+      setErr(stakeIndex, "You're offline. Reconnect and retry.");
+      setTimeout(() => setErr(stakeIndex, undefined), 6000);
+      return;
+    }
+
     if (!walletClient || !publicClient || !address) {
       setErr(stakeIndex, "Connect wallet");
       setTimeout(() => setErr(stakeIndex, undefined), 5000);
@@ -397,6 +417,20 @@ const ActivePackages: React.FC<Props> = ({
   }
 
   async function unstake(stakeIndex: string) {
+       if (busyByRow[stakeIndex]) return; 
+      // Early guards to prevent user panic / broken flows
+      if (anyPending) {
+        setErr(stakeIndex, "Your recent stake is indexing on the subgraph (~2 min). Actions are temporarily disabled.");
+        setTimeout(() => setErr(stakeIndex, undefined), 6000);
+        return;
+      }
+      if (!online) {
+        setErr(stakeIndex, "You're offline. Reconnect and retry.");
+        setTimeout(() => setErr(stakeIndex, undefined), 6000);
+        return;
+      }
+
+
     if (!walletClient || !publicClient || !address) {
       setErr(stakeIndex, "Connect wallet");
       setTimeout(() => setErr(stakeIndex, undefined), 5000);
@@ -465,12 +499,39 @@ const ActivePackages: React.FC<Props> = ({
   }
 
   if (!tableRows.length) {
-    return (
-      <div className="rounded-2xl border border-white/15 p-6 text-center text-white/70 bg-white/[0.04]">
-        No active stakes.
-      </div>
-    );
-  }
+  return (
+    <div className="rounded-2xl border border-white/15 p-6 text-center text-white/80 bg-white/[0.04] space-y-2">
+      {anyPending ? (
+        <>
+          <div className="flex items-center justify-center gap-2">
+            <span className="h-3 w-3 rounded-full border-2 border-white/70 border-t-transparent animate-spin" />
+            <span>Indexing your latest stake…</span>
+          </div>
+          <div className="text-xs text-white/60">
+            This can take up to ~2 minutes. We’ll update automatically.
+          </div>
+        </>
+      ) : !online ? (
+        <>
+          <div className="font-semibold">You’re offline</div>
+          <div className="text-xs text-white/60">
+            Reconnect to fetch your active stakes.
+          </div>
+          <button
+            onClick={onRefresh}
+            disabled={!online || !onRefresh}
+            className="mt-2 inline-flex items-center rounded-lg px-3 py-1.5 bg-white/10 hover:bg-white/15 disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </>
+      ) : (
+        <>No active stakes.</>
+      )}
+    </div>
+  );
+}
+
 
   // tiny UI atoms for mobile
   const PulseDot: React.FC<{ color?: string }> = ({ color = "bg-emerald-400" }) => (
@@ -500,6 +561,13 @@ const ActivePackages: React.FC<Props> = ({
 
   return (
     <section className="mt-8">
+
+      {anyPending && (
+        <div className="mb-3 rounded-xl bg-white/10 ring-1 ring-white/15 px-3 py-2 text-sm text-white/80">
+          We’re indexing your latest transaction. It usually takes ~2 minutes, and your view will refresh automatically.
+        </div>
+      )}
+
       {/* Desktop table */}
       <div className="relative rounded-2xl overflow-hidden bg-white/[0.04] ring-1 ring-white/10 shadow-2xl hidden md:block">
         <div className="overflow-x-auto">
@@ -519,12 +587,17 @@ const ActivePackages: React.FC<Props> = ({
                 const isOpt = !!r.optimistic;
                 const nowMs = Date.now();
 
+                
                 // Optimistic rows should always look locked
+                const optNext = optNextByRow[r.stakeIndex]; // unix seconds (from optimistic post-claim)
+                const effectiveNextMs =
+                  optNext != null ? optNext * 1000 : r.nextClaimWindow?.getTime?.();
                 const availableBase = isOpt
                   ? false
-                  : r.nextClaimWindow
-                  ? r.nextClaimWindow.getTime() <= nowMs
+                  : effectiveNextMs != null
+                  ? effectiveNextMs <= nowMs
                   : true;
+
 
                 const canClaim =
                   (pkg?.isActive ?? r.status === "Active") &&
@@ -564,7 +637,8 @@ const ActivePackages: React.FC<Props> = ({
                         : (
                           <div className="flex items-center gap-2 text-white/60">
                             <span>●</span>
-                            <span>{fmtDateTime(r.nextClaimWindow)}</span>
+                            <span>{fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}</span>
+
                           </div>
                         )}
                     </td>
@@ -595,7 +669,7 @@ const ActivePackages: React.FC<Props> = ({
                     <td className="px-5 py-4">
                       <div className="flex gap-2">
                         <button
-                          disabled={!canClaim}
+                          disabled={!canClaim || anyPending || !online || !!busyByRow[r.stakeIndex]}
                           onClick={() => claim(r.stakeIndex, r.pkgRules)}
                           className={
                             "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium " +
@@ -607,7 +681,7 @@ const ActivePackages: React.FC<Props> = ({
                           Claim
                         </button>
                         <button
-                          disabled={!canUnstake}
+                          disabled={!canUnstake || anyPending || !online || !!busyByRow[r.stakeIndex]}
                           onClick={() => unstake(r.stakeIndex)}
                           className={
                             "inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium " +
@@ -636,11 +710,15 @@ const ActivePackages: React.FC<Props> = ({
           const nowMs = Date.now();
 
           // Optimistic rows should always look locked
+          const optNext = optNextByRow[r.stakeIndex]; // unix seconds (from optimistic post-claim)
+          const effectiveNextMs =
+            optNext != null ? optNext * 1000 : r.nextClaimWindow?.getTime?.();
           const availableBase = isOpt
             ? false
-            : r.nextClaimWindow
-            ? r.nextClaimWindow.getTime() <= nowMs
+            : effectiveNextMs != null
+            ? effectiveNextMs <= nowMs
             : true;
+
 
           const canClaim =
             (pkg?.isActive ?? r.status === "Active") &&
@@ -739,7 +817,8 @@ const ActivePackages: React.FC<Props> = ({
                   // If optimistic → always show Next claim (locked)
                   isOpt ? (
                     <div className="text-xs text-white/60 mt-1">
-                      ⏳ Next claim: {fmtDateTime(r.nextClaimWindow)}
+                      ⏳ Next claim: {fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}
+
                     </div>
                   ) : availableBase ? (
                     <div className="mt-2 text-[13px] text-emerald-300">
@@ -748,7 +827,8 @@ const ActivePackages: React.FC<Props> = ({
                     </div>
                   ) : (
                     <div className="text-xs text-white/60 mt-1">
-                      ⏳ Next claim: {fmtDateTime(r.nextClaimWindow)}
+                      ⏳ Next claim: {fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}
+
                     </div>
                   )
                 ) : null}
@@ -775,7 +855,7 @@ const ActivePackages: React.FC<Props> = ({
               <div className="mt-4 flex gap-3">
                 <motion.button
                   whileTap={canClaim ? { scale: 0.98 } : {}}
-                  disabled={!canClaim}
+                  disabled={!canClaim || anyPending || !online || !!busyByRow[r.stakeIndex]}
                   onClick={() => claim(r.stakeIndex, r.pkgRules)}
                   className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
                     canClaim
@@ -788,7 +868,7 @@ const ActivePackages: React.FC<Props> = ({
 
                 <motion.button
                   whileTap={canUnstake ? { scale: 0.98 } : {}}
-                  disabled={!canUnstake}
+                  disabled={!canUnstake || anyPending || !online || !!busyByRow[r.stakeIndex]}
                   onClick={() => unstake(r.stakeIndex)}
                   className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
                     canUnstake

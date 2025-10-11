@@ -38,6 +38,8 @@ const MAX_UINT256 = 2n ** 256n - 1n;
 const ALLOWANCE_POLL_ATTEMPTS = 8;
 const ALLOWANCE_POLL_DELAY_MS = 450;
 const APPROVE_YY_MAX = false;
+const CONFIRM_MAX_MS = 15_000; // soft-close window (be conservative)
+
 
 interface StakingModalProps {
   package: {
@@ -99,7 +101,8 @@ const STAKING_READS_ABI = [
   { type: "function", name: "referrerOf", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "address" }] },
 ] as const;
 
-const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!d))/g, ",");
+const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
 const prettyFixed = (v: bigint, decimals: number, places = 2) => {
   const s = v.toString().padStart(decimals + 1, "0");
   const i = s.length - decimals;
@@ -142,6 +145,16 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
   }
 }
 
+// small helper
+function waitWithTimeout<T>(p: Promise<T>, ms: number): Promise<{ok: true, val: T} | {ok: false}> {
+  return new Promise((resolve) => {
+    let done = false;
+    const t = setTimeout(() => !done && resolve({ ok: false }), ms);
+    p.then((val) => { if (!done) { done = true; clearTimeout(t); resolve({ ok: true, val }); } })
+     .catch(() => { if (!done) { done = true; clearTimeout(t); resolve({ ok: false }); } });
+  });
+}
+
 const StakingModal: React.FC<StakingModalProps> = ({
   package: pkg,
   onClose,
@@ -182,7 +195,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      document.documentElement.classList.remove("modal-open");
+      document.documentElement.classList.remove("modal-open", "dark");
       document.body.style.overflow = prevOverflow;
     };
   }, []);
@@ -599,31 +612,76 @@ const StakingModal: React.FC<StakingModalProps> = ({
   }
 
   useEffect(() => {
-    if (!stakeTxHash || stakeConfirmed) return;
-    (async () => {
+  if (!stakeTxHash || stakeConfirmed) return;
+
+  let mounted = true;
+  (async () => {
+    // start waiting for the receipt
+    const receiptWait = publicClient.waitForTransactionReceipt({
+      hash: stakeTxHash,
+      confirmations: WAIT_CONFIRMATIONS,
+    });
+
+    // race against a gentle timeout; after that we calm the user and close the modal
+    const raced = await waitWithTimeout(receiptWait, CONFIRM_MAX_MS);
+
+    // if timed out: inform, stop spinner, close modal — optimistic row already exists
+    if (!raced.ok) {
+      if (!mounted) return;
+      setIsStaking(false);
+      window.dispatchEvent(new CustomEvent("toast:info", {
+        detail: {
+          title: "Indexing your stake",
+          message: "This can take ~2 minutes. Your dashboard will refresh automatically.",
+        },
+      }));
+      // fire extra bursts so dashboard wakes up even if user stays on page
+      emitRefreshBursts({ txHash: stakeTxHash });
+      onClose();
+      // continue waiting in the background for success/failure to broadcast events:
       try {
-        const rcpt = await publicClient.waitForTransactionReceipt({ hash: stakeTxHash, confirmations: WAIT_CONFIRMATIONS });
+        const rcpt = await receiptWait;
+        if (!mounted) return;
         if (rcpt.status === "reverted") {
           const appErr = explainTxError("stake", new Error("Transaction reverted"));
           window.dispatchEvent(new CustomEvent("toast:error", { detail: appErr }));
           setActionMsg(appErr.message);
-          setIsStaking(false);
-          lastStakeKeyRef.current = null;
           return;
         }
         setStakeConfirmed(true);
-        showUserSuccess("Stake submitted", "Refreshing your positions…");
+        showUserSuccess("Stake confirmed", "Your positions are up to date.");
+        window.dispatchEvent(new CustomEvent("stake:confirmed", { detail: { txHash: stakeTxHash } }));
         emitRefreshBursts({ txHash: stakeTxHash });
-        setIsStaking(false);
-        onClose();
       } catch (e) {
+        if (!mounted) return;
         showEvmError(msgFromUnknown(e), { context: "Stake" });
-        setActionMsg(normalizeEvmError(e)?.message || (e as any)?.message || "Stake failed");
-        setIsStaking(false);
-        lastStakeKeyRef.current = null;
+        setActionMsg(normalizeEvmError(e)?.message || "Stake failed");
       }
-    })();
-  }, [publicClient, onClose, stakeTxHash, stakeConfirmed]);
+      return;
+    }
+
+    // receipt arrived within the window
+    const rcpt = raced.val;
+    if (!mounted) return;
+
+    if (rcpt.status === "reverted") {
+      const appErr = explainTxError("stake", new Error("Transaction reverted"));
+      window.dispatchEvent(new CustomEvent("toast:error", { detail: appErr }));
+      setActionMsg(appErr.message);
+      setIsStaking(false);
+      return;
+    }
+    setStakeConfirmed(true);
+    showUserSuccess("Stake submitted", "Refreshing your positions…");
+    window.dispatchEvent(new CustomEvent("stake:confirmed", { detail: { txHash: stakeTxHash } }));
+    emitRefreshBursts({ txHash: stakeTxHash });
+    setIsStaking(false);
+    onClose();
+  })();
+
+  return () => { mounted = false; };
+}, [publicClient, onClose, stakeTxHash, stakeConfirmed]);
+
 
   async function handleApproveAndStake() {
     setActionMsg(null);
