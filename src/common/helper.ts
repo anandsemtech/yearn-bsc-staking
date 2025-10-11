@@ -1,16 +1,28 @@
 // src/common/helper.ts
-// Returns Tailwind gradient classes for our cards’ accent colors.
-export function getColorClasses(color: string): string {
-  switch (color) {
-    case "blue":
-      return "from-sky-500 to-indigo-600";
-    case "purple":
-      return "from-fuchsia-500 to-violet-600";
-    case "green":
-      return "from-emerald-500 to-teal-600";
-    case "orange":
-      return "from-amber-500 to-orange-600";
-    default:
-      return "from-slate-500 to-slate-700";
-  }
+// Restored classic gradients — same order & tone as before
+
+export function getColorClasses(key: string | number) {
+  const index = typeof key === "number" ? key : parseInt(key) || 0;
+  const palette = [
+    "from-sky-500 to-indigo-500",     // blue gradient (cool tone)
+    "from-fuchsia-500 to-purple-500", // purple gradient (vivid)
+    "from-emerald-500 to-teal-500",   // green gradient (calm)
+    "from-orange-500 to-amber-500",   // orange gradient (warm)
+  ];
+  return palette[index % palette.length];
+}
+
+/**
+ * Optional: a light accent for subtle backgrounds or outlines.
+ * Used by some UI sections to create harmony with the gradients.
+ */
+export function getSoftColor(key: string | number) {
+  const index = typeof key === "number" ? key : parseInt(key) || 0;
+  const palette = [
+    "text-sky-400",
+    "text-fuchsia-400",
+    "text-emerald-400",
+    "text-orange-400",
+  ];
+  return palette[index % palette.length];
 }
