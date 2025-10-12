@@ -171,6 +171,9 @@ export default function Dashboard() {
     } catch {}
   };
 
+  /* Show Star Journey only when wallet has a preferred badge and badges have finished loading */
+  const showStarJourney = !badgesLoading && hasPreferred;
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 pb-[92px] md:pb-8">
 
@@ -235,16 +238,18 @@ export default function Dashboard() {
         <ActivePackages rows={rows} loading={loading} error={error} onRefresh={refresh} />
       </GlassPanel>
 
-      {/* ⭐ NEW: Affiliate Star Journey (dark, subgraph-backed with 429-safe client) */}
-      <GlassPanel title="Affiliate Star Journey" className="mt-0" id="star-journey">
-        <StarJourneyPanel
-          address={address}
-          goldenStarWindowDays={30}
-          star1DirectNeeded={5}
-          higherStarChildNeeded={2}
-          goldenStarDirectNeeded={15}
-        />
-      </GlassPanel>
+      {/* ⭐ NEW: Affiliate Star Journey — only when user has preferred NFT badge */}
+      {showStarJourney && (
+        <GlassPanel title="Affiliate Star Journey" className="mt-0" id="star-journey">
+          <StarJourneyPanel
+            address={address}
+            goldenStarWindowDays={30}
+            star1DirectNeeded={5}
+            higherStarChildNeeded={2}
+            goldenStarDirectNeeded={15}
+          />
+        </GlassPanel>
+      )}
 
       {selectedPackage && (
         <StakingModal
