@@ -4,6 +4,8 @@ import type { Address } from "viem";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Transition } from "framer-motion";
 
+
+
 type Item = {
   title: string;
   imageUrl: string | null | undefined;
@@ -57,33 +59,53 @@ const HonoraryNftPopup: React.FC<Props> = ({
   const hero = keyedItems[heroIndex];
 
   const handleMinimize = () => {
-    const anchor = document.getElementById("honorary-chip-anchor");
-    const imgEl = heroImgRef.current;
-    if (anchor && imgEl) {
-      const from = imgEl.getBoundingClientRect();
-      const to = anchor.getBoundingClientRect();
-      const id = ++flySeq.current;
-      setFlying({ id, src: (hero?.imageUrl || placeholderSrc) as string, from, to });
-      setTimeout(() => {
-        hero &&
-          onMinimizeToHeader?.({
-            title: hero.title,
-            imageUrl: hero.imageUrl || placeholderSrc,
-            address: hero.address as Address,
-          });
-        onClose();
-      }, 480);
-      return;
-    }
-    hero &&
-      onMinimizeToHeader?.({
+  const anchor = document.getElementById("honorary-chip-anchor");
+  const imgEl = heroImgRef.current;
+
+  // Prepare payload once
+  const payload = hero
+    ? {
         title: hero.title,
         imageUrl: hero.imageUrl || placeholderSrc,
         address: hero.address as Address,
-      });
-    onClose();
+      }
+    : null;
+
+  const sendMinimizeSignal = () => {
+    if (payload) {
+      // 1) Global event for header listeners
+      window.dispatchEvent(
+        new CustomEvent("honorary:minimize", { detail: payload })
+      );
+      // 2) Legacy/local callback (if provided)
+      onMinimizeToHeader?.(payload);
+    }
   };
 
+  if (anchor && imgEl) {
+    const from = imgEl.getBoundingClientRect();
+    const to = anchor.getBoundingClientRect();
+    const id = ++flySeq.current;
+
+    setFlying({
+      id,
+      src: (hero?.imageUrl || placeholderSrc) as string,
+      from,
+      to,
+    });
+
+    // Allow the fly animation to play before we update header + close
+    setTimeout(() => {
+      sendMinimizeSignal();
+      onClose();
+    }, 480);
+    return;
+  }
+
+  // No anchor or img—just notify and close immediately
+  sendMinimizeSignal();
+  onClose();
+};
   const swipeTo = (dir: 1 | -1) => {
     setHeroIndex((i) => {
       const n = keyedItems.length || 1;

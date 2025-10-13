@@ -18,27 +18,25 @@ import {
   usePublicClient as useWagmiPublicClient,
   useWalletClient,
 } from "wagmi";
-import { useAllowedCompositionsFromSubgraph as useAllowedCompositions } from "@/hooks/useAllowedCompositionsSubgraph";
 import { STAKING_ABI } from "@/web3/abi/stakingAbi";
 import { bsc } from "viem/chains";
 import { createPublicClient, http } from "viem";
-import {
-  explainTxError,
-  showUserSuccess,
-  showEvmError,
-  normalizeEvmError,
-} from "@/lib/errors";
+import { showEvmError, normalizeEvmError } from "@/lib/errors";
+
 import { getReferrer } from "@/lib/referrer";
 
-const DBG = false;
-const log = (...a: any[]) => { if (DBG) console.log(...a); };
+import { openTxOverlay } from "@/lib/txOverlay";
+
+
+
+
 
 const WAIT_CONFIRMATIONS = 1;
 const MAX_UINT256 = 2n ** 256n - 1n;
 const ALLOWANCE_POLL_ATTEMPTS = 8;
 const ALLOWANCE_POLL_DELAY_MS = 450;
 const APPROVE_YY_MAX = false;
-const CONFIRM_MAX_MS = 15_000; // soft-close window (be conservative)
+
 
 
 interface StakingModalProps {
@@ -99,6 +97,8 @@ const STAKING_READS_ABI = [
   { type: "function", name: "isWhitelisted", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "userTotalStaked", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "referrerOf", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "address" }] },
+  // NEW: on-chain compositions (array of [uint8, uint8, uint8])
+  { type: "function", name: "getValidCompositions", stateMutability: "view", inputs: [], outputs: [{ type: "uint8[][]" }] },
 ] as const;
 
 const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -145,15 +145,7 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
   }
 }
 
-// small helper
-function waitWithTimeout<T>(p: Promise<T>, ms: number): Promise<{ok: true, val: T} | {ok: false}> {
-  return new Promise((resolve) => {
-    let done = false;
-    const t = setTimeout(() => !done && resolve({ ok: false }), ms);
-    p.then((val) => { if (!done) { done = true; clearTimeout(t); resolve({ ok: true, val }); } })
-     .catch(() => { if (!done) { done = true; clearTimeout(t); resolve({ ok: false }); } });
-  });
-}
+
 
 const StakingModal: React.FC<StakingModalProps> = ({
   package: pkg,
@@ -186,7 +178,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
       el.id = "staking-modal-root";
       document.body.appendChild(el);
     }
-    // hard-lock dark on the portal host
     el.classList.add("dark");
     (el.style as any).colorScheme = "dark";
     setPortalEl(el);
@@ -246,9 +237,41 @@ const StakingModal: React.FC<StakingModalProps> = ({
     }
   }
 
-  /* Compositions */
-  const { compositions: compRows, isLoading: compLoading, error: compError } =
-    useAllowedCompositions();
+  /* --------------------------- On-chain compositions --------------------------- */
+  const [compRows, setCompRows] = useState<{ yYearnPct: number; sYearnPct: number; pYearnPct: number; }[]>([]);
+  const [compLoading, setCompLoading] = useState<boolean>(false);
+  const [compError, setCompError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      setCompLoading(true);
+      setCompError(null);
+      try {
+        const rows = (await publicClient.readContract({
+          address: stakingContract,
+          abi: STAKING_READS_ABI,
+          functionName: "getValidCompositions",
+          args: [],
+        })) as number[][];
+        if (stop) return;
+        const mapped = (rows || []).map((r) => ({
+          yYearnPct: Number(r?.[0] ?? 0),
+          sYearnPct: Number(r?.[1] ?? 0),
+          pYearnPct: Number(r?.[2] ?? 0),
+        }));
+        setCompRows(mapped);
+      } catch (e: any) {
+        if (!stop) {
+          setCompRows([]);
+          setCompError(e?.message || "Failed to load compositions");
+        }
+      } finally {
+        if (!stop) setCompLoading(false);
+      }
+    })();
+    return () => { stop = true; };
+  }, [publicClient]);
 
   const validCompositions = useMemo<number[][]>(() => {
     if (!preferred) return [[100, 0, 0]];
@@ -582,12 +605,13 @@ const StakingModal: React.FC<StakingModalProps> = ({
     return null;
   }
 
-  const [stakeTxHash, setStakeTxHash] = useState<Hex | null>(null);
-  const [stakeConfirmed, setStakeConfirmed] = useState(false);
+  
   const [isApproving, setIsApproving] = useState(false);
   const [isStaking, setIsStaking] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const lastStakeKeyRef = useRef<string | null>(null);
+
+  
 
   async function sendStakeTx(finalRef: Address): Promise<Hex> {
     if (!walletClient || !address) throw new Error("Wallet not ready");
@@ -600,88 +624,15 @@ const StakingModal: React.FC<StakingModalProps> = ({
       account: address,
       chain: bsc,
     };
-    let hash: Hex;
     try {
-      const sim = await publicClient.simulateContract(call);
-      hash = await walletClient.writeContract(sim.request);
-    } catch {
-      hash = await walletClient.writeContract(call);
-    }
-    setStakeTxHash(hash);
-    return hash;
+       const sim = await publicClient.simulateContract(call);
+       return await walletClient.writeContract(sim.request);
+     } catch {
+       return await walletClient.writeContract(call);
+     }
   }
 
-  useEffect(() => {
-  if (!stakeTxHash || stakeConfirmed) return;
-
-  let mounted = true;
-  (async () => {
-    // start waiting for the receipt
-    const receiptWait = publicClient.waitForTransactionReceipt({
-      hash: stakeTxHash,
-      confirmations: WAIT_CONFIRMATIONS,
-    });
-
-    // race against a gentle timeout; after that we calm the user and close the modal
-    const raced = await waitWithTimeout(receiptWait, CONFIRM_MAX_MS);
-
-    // if timed out: inform, stop spinner, close modal — optimistic row already exists
-    if (!raced.ok) {
-      if (!mounted) return;
-      setIsStaking(false);
-      window.dispatchEvent(new CustomEvent("toast:info", {
-        detail: {
-          title: "Indexing your stake",
-          message: "This can take ~2 minutes. Your dashboard will refresh automatically.",
-        },
-      }));
-      // fire extra bursts so dashboard wakes up even if user stays on page
-      emitRefreshBursts({ txHash: stakeTxHash });
-      onClose();
-      // continue waiting in the background for success/failure to broadcast events:
-      try {
-        const rcpt = await receiptWait;
-        if (!mounted) return;
-        if (rcpt.status === "reverted") {
-          const appErr = explainTxError("stake", new Error("Transaction reverted"));
-          window.dispatchEvent(new CustomEvent("toast:error", { detail: appErr }));
-          setActionMsg(appErr.message);
-          return;
-        }
-        setStakeConfirmed(true);
-        showUserSuccess("Stake confirmed", "Your positions are up to date.");
-        window.dispatchEvent(new CustomEvent("stake:confirmed", { detail: { txHash: stakeTxHash } }));
-        emitRefreshBursts({ txHash: stakeTxHash });
-      } catch (e) {
-        if (!mounted) return;
-        showEvmError(msgFromUnknown(e), { context: "Stake" });
-        setActionMsg(normalizeEvmError(e)?.message || "Stake failed");
-      }
-      return;
-    }
-
-    // receipt arrived within the window
-    const rcpt = raced.val;
-    if (!mounted) return;
-
-    if (rcpt.status === "reverted") {
-      const appErr = explainTxError("stake", new Error("Transaction reverted"));
-      window.dispatchEvent(new CustomEvent("toast:error", { detail: appErr }));
-      setActionMsg(appErr.message);
-      setIsStaking(false);
-      return;
-    }
-    setStakeConfirmed(true);
-    showUserSuccess("Stake submitted", "Refreshing your positions…");
-    window.dispatchEvent(new CustomEvent("stake:confirmed", { detail: { txHash: stakeTxHash } }));
-    emitRefreshBursts({ txHash: stakeTxHash });
-    setIsStaking(false);
-    onClose();
-  })();
-
-  return () => { mounted = false; };
-}, [publicClient, onClose, stakeTxHash, stakeConfirmed]);
-
+  
 
   async function handleApproveAndStake() {
     setActionMsg(null);
@@ -734,6 +685,9 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
       setIsStaking(true);
       const hash = await sendStakeTx(ref);
+      // Show global spinner & let it resolve to success/close + trigger refresh
+      openTxOverlay(hash as Hex, "Waiting for confirmation…");
+
 
       const totalHuman =
         (humanPerToken[0] + humanPerToken[1] + humanPerToken[2])
@@ -755,6 +709,10 @@ const StakingModal: React.FC<StakingModalProps> = ({
         nextClaimAt,
       });
 
+      // Close the staking modal immediately; overlay keeps spinning until confirmed
+      setIsStaking(false);
+      onClose();
+
     } catch (e: unknown) {
       lastStakeKeyRef.current = null;
       setIsApproving(false);
@@ -766,16 +724,15 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
   const projectedEarnings = amountNum * (pkg.apy / 100);
   const mainDisabled =
-    isApproving || isStaking || !!stakeTxHash || !address ||
+   isApproving || isStaking || !address ||
     amountNum < min || (!isMultipleOk && mStep > 1) ||
     validCompositions.length === 0 || !!chainIssue ||
     (yWei + sWei + pWei === 0n) || !hasSufficientBalances || (preferred && refValid === false);
 
   const mainBtnText =
-    isApproving ? "Approving…" :
-    isStaking && !stakeTxHash ? "Sending stake…" :
-    stakeTxHash ? "Confirming…" :
-    "Approve & Stake";
+   isApproving ? "Approving…" :
+   isStaking ? "Sending stake…" :
+   "Approve & Stake";
 
   const formatWei = (wei: bigint, dec: number) => prettyFixed(wei, dec, 2);
 
@@ -1072,7 +1029,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
                       ? "bg-gradient-to-r from-violet-900/30 to-indigo-900/30 text-gray-400 cursor-not-allowed"
                       : "bg-gradient-to-r from-violet-500 to-indigo-600 hover:from-violet-600 hover:to-indigo-700 text-white shadow-sm"}`}
                 >
-                  {isApproving || isStaking || !!stakeTxHash ? (
+                  {isApproving || isStaking ? (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (<Zap className="w-4 h-4" />)}
                   <span>{mainBtnText}</span>
@@ -1082,6 +1039,8 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
           </div>
         </div>
+
+        
       </div>
     ),
     portalEl

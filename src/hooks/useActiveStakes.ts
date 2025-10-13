@@ -1,22 +1,35 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+// src/hooks/useActiveStakes.ts
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Address } from "viem";
+import { bsc } from "viem/chains";
+import { usePublicClient } from "wagmi";
 import { formatEther } from "viem";
-import { gql } from "graphql-request";
-import { subgraph } from "@/lib/subgraph";
+import { STAKING_ABI } from "@/web3/abi/stakingAbi";
 import type { ActivePackageRow } from "@/components/ActivePackages";
 
-/* ---------------- Local cache ---------------- */
-type CacheValue = { t: number; data: any };
-const MEM = new Map<string, CacheValue>();
-const TTL_MS_DEFAULT = 60_000;
+/* ----------------------------------------------------------------------------------
+   ENV
+---------------------------------------------------------------------------------- */
+const PROXY =
+  (import.meta.env.VITE_BASE_CONTRACT_ADDRESS as `0x${string}`) ||
+  ("0x0000000000000000000000000000000000000000" as const);
 
-function readCache(key: string, ttlMs = TTL_MS_DEFAULT) {
+/* ----------------------------------------------------------------------------------
+   Local cache (mem + localStorage)
+---------------------------------------------------------------------------------- */
+type CacheValue<T> = { t: number; data: T };
+const MEM = new Map<string, CacheValue<any>>();
+
+const DEFAULT_TTL_MS = 60_000;
+
+function readCache<T>(key: string, ttlMs = DEFAULT_TTL_MS): T | null {
   const now = Date.now();
   const m = MEM.get(key);
-  if (m && now - m.t < ttlMs) return m.data;
+  if (m && now - m.t < ttlMs) return m.data as T;
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const v: CacheValue = JSON.parse(raw);
+    const v = JSON.parse(raw) as CacheValue<T>;
     if (now - v.t < ttlMs) {
       MEM.set(key, v);
       return v.data;
@@ -24,102 +37,81 @@ function readCache(key: string, ttlMs = TTL_MS_DEFAULT) {
   } catch {}
   return null;
 }
-function writeCache(key: string, data: any) {
-  const entry: CacheValue = { t: Date.now(), data };
+
+function writeCache<T>(key: string, data: T) {
+  const entry: CacheValue<T> = { t: Date.now(), data };
   MEM.set(key, entry);
   try {
     localStorage.setItem(key, JSON.stringify(entry));
   } catch {}
 }
 
-/* ---------------- GraphQL (single call) ---------------- */
-const Q_ACTIVE_VIEW = gql/* GraphQL */ `
-  query ActiveView($id: ID!) {
-    packages(orderBy: packageId, orderDirection: asc) {
-      packageId
-      durationInDays
-      aprBps
-      monthlyUnstake
-      isActive
-      monthlyAPRClaimable
-      claimableInterval
-      principalLocked
-    }
-    stakes(where: { user: $id }, orderBy: startTime, orderDirection: desc) {
-      id
-      packageId
-      totalStaked
-      claimedAPR
-      withdrawnPrincipal
-      startTime
-      lastClaimedAt
-      lastUnstakedAt
-      isFullyUnstaked
-    }
-  }
-`;
+/* ----------------------------------------------------------------------------------
+   Helpers
+---------------------------------------------------------------------------------- */
+function withTimeout<T>(p: Promise<T>, ms = 15_000): Promise<T> {
+  let id: number | undefined;
+  const to = new Promise<never>((_, rej) => {
+    id = window.setTimeout(() => rej(new Error("Network timeout")), ms);
+  });
+  return Promise.race([p, to]).finally(() => id && clearTimeout(id)) as Promise<T>;
+}
 
-type RawPkg = {
-  packageId: number | string;
-  durationInDays: number | string;
-  aprBps: number | string;
-  monthlyUnstake: boolean;
-  isActive: boolean;
-  monthlyAPRClaimable: boolean;
-  claimableInterval: string;
-  principalLocked: boolean;
-};
-type RawStake = {
-  id: string;
-  packageId: number | string;
-  totalStaked: string;
-  claimedAPR: string;
-  withdrawnPrincipal: string;
-  startTime: string;
-  lastClaimedAt: string;
-  lastUnstakedAt: string;
+/** viem multicall result can be { result: ... } or raw ... depending on version/config */
+function unwrap(entry: any) {
+  if (entry == null) return undefined;
+  if (Array.isArray(entry?.result)) return entry.result;
+  if (typeof entry?.result !== "undefined") return entry.result; // can be bigint/bool/tuple
+  if (Array.isArray(entry)) return entry;
+  return entry;
+}
+
+/** Convert bigint wei → human string with small rounding */
+function fmtAmount(wei: bigint): string {
+  try {
+    const n = Number(formatEther(wei));
+    return Number.isFinite(n) ? n.toLocaleString() : "0";
+  } catch {
+    return "0";
+  }
+}
+
+/* ----------------------------------------------------------------------------------
+   On-chain shapes we read
+---------------------------------------------------------------------------------- */
+type StakeData = {
+  totalStaked: bigint;
+  claimedAPR: bigint;
+  withdrawnPrincipal: bigint;
+  startTime: bigint;       // uint40
+  lastClaimedAt: bigint;   // uint40
+  lastUnstakedAt: bigint;  // uint40
+  packageId: bigint;       // uint16
   isFullyUnstaked: boolean;
 };
 
-/* ---------------- Fetch control (per-user) ---------------- */
-type Meta = { lastFetchedAt: number; lastNonEmptyAt: number; lastRowCount: number };
-const META_KEY = (id: string) => `activeview:meta:${id}`;
-const EMPTY_COOLDOWN_MS = 5 * 60_000; // 5 min: skip refetch if empty recently
+type Pkg = {
+  id: bigint;                              // uint16
+  durationInDays: bigint;                  // uint16
+  apr: bigint;                             // uint16 (basis points)
+  monthlyUnstake: boolean;
+  isActive: boolean;
+  minStakeAmount: bigint;
+  monthlyPrincipalReturnPercent: bigint;   // uint16 bps/month
+  monthlyAPRClaimable: boolean;
+  claimableInterval: bigint;               // seconds
+  stakeMultiple: bigint;
+  principalLocked: boolean;
+};
 
-function readMeta(id: string): Meta {
-  try {
-    const raw = localStorage.getItem(META_KEY(id));
-    if (!raw) return { lastFetchedAt: 0, lastNonEmptyAt: 0, lastRowCount: -1 };
-    return JSON.parse(raw) as Meta;
-  } catch {
-    return { lastFetchedAt: 0, lastNonEmptyAt: 0, lastRowCount: -1 };
-  }
-}
-function writeMeta(id: string, patch: Partial<Meta>) {
-  const prev = readMeta(id);
-  const next = { ...prev, ...patch };
-  try {
-    localStorage.setItem(META_KEY(id), JSON.stringify(next));
-  } catch {}
-}
+type RpcPayload = {
+  stakes: Array<StakeData & { idx: number; nextClaim: bigint; fullyUnstaked: boolean }>;
+  pkgs: Map<number, Pkg>;
+};
 
-// per-user "dirty" flags so one user's events don't affect another
-const DIRTY = new Map<string, boolean>();
-const isDirty = (id: string) => DIRTY.get(id) === true;
-const setDirty = (id: string, v: boolean) => DIRTY.set(id, v);
-
-/* ---------------- Timeout helper ---------------- */
-function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
-  let t: number | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    t = window.setTimeout(() => reject(new Error("Network timeout")), ms);
-  });
-  return Promise.race([p, timeout]).finally(() => {
-    if (t) clearTimeout(t);
-  }) as Promise<T>;
-}
-
-/* ---------------- Hook ---------------- */
+/* ----------------------------------------------------------------------------------
+   Core hook (RPC-first)
+---------------------------------------------------------------------------------- */
 export function useActiveStakes(opts: {
   address?: `0x${string}` | null;
   requireDirtyOrStale?: boolean;
@@ -132,179 +124,273 @@ export function useActiveStakes(opts: {
     softMaxAgeMs = 120_000,
     ttlMs = 60_000,
   } = opts;
-  const userId = (address ?? "").toLowerCase();
+
+  const user = (address ?? "").toLowerCase() as Address | "";
+  const publicClient = usePublicClient({ chainId: bsc.id });
 
   const [rows, setRows] = useState<ActivePackageRow[]>([]);
-  const [loading, setLoading] = useState<boolean>(!!userId);
+  const [loading, setLoading] = useState<boolean>(!!user);
   const [error, setError] = useState<string | null>(null);
+
   const abortRef = useRef(false);
 
-  const buildRows = useCallback(
-    (pkgs: RawPkg[], stakes: RawStake[]): ActivePackageRow[] => {
-      const pkgMap = new Map<
-        number,
-        {
-          durationInDays: number;
-          aprBps: number;
-          monthlyUnstake: boolean;
-          isActive: boolean;
-          monthlyAPRClaimable: boolean;
-          claimableIntervalSec: number;
-          principalLocked: boolean;
+  /* --------------------------- Per-user "dirty" tracking --------------------------- */
+  const DIRTY = useMemo(() => new Map<string, boolean>(), []);
+  const isDirty = (id: string) => DIRTY.get(id) === true;
+  const setDirty = (id: string, v: boolean) => DIRTY.set(id, v);
+
+  /* --------------------------- Meta to control refetching -------------------------- */
+  type Meta = { lastFetchedAt: number; lastRowCount: number };
+  const META_KEY = (id: string) => `activeview:rpc:meta:${id}`;
+  const readMeta = (id: string): Meta => {
+    try {
+      const raw = localStorage.getItem(META_KEY(id));
+      return raw ? (JSON.parse(raw) as Meta) : { lastFetchedAt: 0, lastRowCount: -1 };
+    } catch {
+      return { lastFetchedAt: 0, lastRowCount: -1 };
+    }
+  };
+  const writeMeta = (id: string, patch: Partial<Meta>) => {
+    const prev = readMeta(id);
+    const next = { ...prev, ...patch };
+    try {
+      localStorage.setItem(META_KEY(id), JSON.stringify(next));
+    } catch {}
+  };
+
+  /* --------------------------------- RPC loader ----------------------------------- */
+  const loadRpc = useCallback(async (): Promise<RpcPayload> => {
+    if (!publicClient || !user) return { stakes: [], pkgs: new Map() };
+
+    // 1) userStakeCounts
+    const count = (await withTimeout(
+      publicClient.readContract({
+        address: PROXY,
+        abi: STAKING_ABI as any,
+        functionName: "userStakeCounts",
+        args: [user],
+      }) as Promise<bigint>,
+      12_000
+    )) as bigint;
+
+    const n = Number(count ?? 0n);
+    if (n <= 0) return { stakes: [], pkgs: new Map() };
+
+    // 2) multicall stakes + helpers
+    const stakeCalls = Array.from({ length: n }, (_, i) => ({
+      address: PROXY,
+      abi: STAKING_ABI as any,
+      functionName: "getStake",
+      args: [user, BigInt(i)],
+    }));
+
+    const nextCalls = Array.from({ length: n }, (_, i) => ({
+      address: PROXY,
+      abi: STAKING_ABI as any,
+      functionName: "getNextClaimTime",
+      args: [user, BigInt(i)],
+    }));
+
+    const fullCalls = Array.from({ length: n }, (_, i) => ({
+      address: PROXY,
+      abi: STAKING_ABI as any,
+      functionName: "isFullyUnstaked",
+      args: [user, BigInt(i)],
+    }));
+
+    const [stakeResRaw, nextResRaw, fullResRaw] = await withTimeout(
+      Promise.all([
+        publicClient.multicall({ contracts: stakeCalls, allowFailure: false }) as any,
+        publicClient.multicall({ contracts: nextCalls, allowFailure: false }) as any,
+        publicClient.multicall({ contracts: fullCalls, allowFailure: false }) as any,
+      ]),
+      15_000
+    );
+
+    const stakes: Array<StakeData & { idx: number; nextClaim: bigint; fullyUnstaked: boolean }> =
+      (stakeResRaw as any[]).map((entry: any, i: number) => {
+        const s = unwrap(entry) as StakeData | undefined;
+        const next = unwrap(nextResRaw[i]);
+        const full = unwrap(fullResRaw[i]);
+        if (!s) {
+          return {
+            // fallback empty; will be filtered out below
+            totalStaked: 0n,
+            claimedAPR: 0n,
+            withdrawnPrincipal: 0n,
+            startTime: 0n,
+            lastClaimedAt: 0n,
+            lastUnstakedAt: 0n,
+            packageId: 0n,
+            isFullyUnstaked: false,
+            idx: i,
+            nextClaim: 0n,
+            fullyUnstaked: false,
+          };
         }
-      >();
-      for (const p of pkgs) {
-        const idNum = typeof p.packageId === "string" ? Number(p.packageId) : p.packageId;
-        pkgMap.set(idNum, {
-          durationInDays: Number(p.durationInDays || 0),
-          aprBps: Number(p.aprBps || 0),
-          monthlyUnstake: Boolean(p.monthlyUnstake),
-          isActive: Boolean(p.isActive),
-          monthlyAPRClaimable: Boolean(p.monthlyAPRClaimable),
-          claimableIntervalSec: Number(p.claimableInterval || 0),
-          principalLocked: Boolean(p.principalLocked),
-        });
-      }
-
-      return stakes.map((s) => {
-        const pkgId = typeof s.packageId === "string" ? Number(s.packageId) : s.packageId;
-        const pkg = pkgMap.get(pkgId);
-
-        const stakeIndexStr = s.id.split("-").pop() || "0";
-        const startSec = Number(s.startTime || 0);
-        const lastClaimSec = Number(s.lastClaimedAt || 0);
-
-        const nextClaimAt =
-          pkg?.monthlyAPRClaimable && pkg?.claimableIntervalSec
-            ? lastClaimSec > 0
-              ? lastClaimSec + pkg.claimableIntervalSec
-              : startSec > 0
-              ? startSec + pkg.claimableIntervalSec
-              : 0
-            : 0;
-
-        const totalStakedWei = BigInt(s.totalStaked || "0");
-        const claimedAprWei = BigInt(s.claimedAPR || "0");
-        const principalWithdrawnWei = BigInt(s.withdrawnPrincipal || "0");
-
-        let amountHuman = "0";
-        try {
-          amountHuman = Number(formatEther(totalStakedWei)).toLocaleString();
-        } catch {}
-
-        const packageActive = Boolean(pkg?.isActive);
-        const fullyUnstaked = Boolean(s.isFullyUnstaked) || principalWithdrawnWei >= totalStakedWei;
-
         return {
-          id: s.id,
-          packageName: `Package #${pkgId}`,
-          amount: amountHuman,
-          startDate: startSec ? new Date(startSec * 1000) : new Date(0),
-          nextClaimWindow: nextClaimAt ? new Date(nextClaimAt * 1000) : undefined,
-          status: packageActive ? "Active" : "Inactive",
-          stakeIndex: stakeIndexStr,
-          packageId: pkgId,
-          aprPct: pkg ? pkg.aprBps / 100 : undefined,
+          ...(s as any),
+          idx: i,
+          nextClaim: (next ?? 0n) as bigint,
+          fullyUnstaked: Boolean(full),
+        };
+      }).filter((s) => s.totalStaked !== 0n || s.startTime !== 0n);
 
-          isFullyUnstaked: fullyUnstaked,
-          totalStakedWei,
-          claimedAprWei,
-          aprBps: pkg?.aprBps,
-          startTs: startSec || undefined,
-          nextClaimAt: nextClaimAt || undefined,
-          principalWithdrawnWei,
+    // 3) fetch distinct packages referenced by stakes
+    const pkgIds = Array.from(new Set(stakes.map((s) => Number(s.packageId))));
+    const pkgCalls = pkgIds.map((pid) => ({
+      address: PROXY,
+      abi: STAKING_ABI as any,
+      functionName: "packages",          // ← mapping getter (stable)
+      args: [BigInt(pid)],
+    }));
 
-          pkgRules: pkg
-            ? {
-                durationInDays: pkg.durationInDays,
-                aprBps: pkg.aprBps,
-                monthlyUnstake: pkg.monthlyUnstake,
-                isActive: pkg.isActive,
-                monthlyAPRClaimable: pkg.monthlyAPRClaimable,
-                claimableIntervalSec: pkg.claimableIntervalSec,
-                principalLocked: pkg.principalLocked,
-              }
-            : undefined,
-        } as ActivePackageRow;
-      });
-    },
-    []
-  );
+    const pkgResultsRaw: any[] =
+      pkgCalls.length > 0
+        ? ((await publicClient.multicall({
+            contracts: pkgCalls,
+            allowFailure: true,          // tolerate bad/out-of-range ids
+          })) as any[])
+        : [];
 
+    const pkgs = new Map<number, Pkg>();
+    pkgResultsRaw.forEach((entry, i) => {
+      // entry could be { status, result } or raw tuple; skip failures/empties
+      if (entry?.status === "failure") return;
+      const p = unwrap(entry);
+      if (!Array.isArray(p) || p.length < 11) return;
+
+      const pid = pkgIds[i]!;
+      const pkg: Pkg = {
+        id: p[0],
+        durationInDays: p[1],
+        apr: p[2],
+        monthlyUnstake: p[3],
+        isActive: p[4],
+        minStakeAmount: p[5],
+        monthlyPrincipalReturnPercent: p[6],
+        monthlyAPRClaimable: p[7],
+        claimableInterval: p[8],
+        stakeMultiple: p[9],
+        principalLocked: p[10],
+      };
+      pkgs.set(pid, pkg);
+    });
+
+    return { stakes, pkgs };
+  }, [publicClient, user]);
+
+  /* ------------------------------ Build UI rows ----------------------------------- */
+  const buildRows = useCallback((data: RpcPayload): ActivePackageRow[] => {
+    const out: ActivePackageRow[] = [];
+
+    for (const s of data.stakes) {
+      const pid = Number(s.packageId);
+      const pkg = data.pkgs.get(pid);
+
+      const startSec = Number(s.startTime ?? 0n);
+      const nextClaimSec = Number(s.nextClaim ?? 0n);
+
+      const aprBps = Number(pkg?.apr ?? 0n);
+      const aprPct = aprBps > 0 ? aprBps / 100 : undefined;
+
+      const fullyUnstaked =
+        s.isFullyUnstaked ||
+        s.withdrawnPrincipal >= s.totalStaked ||
+        s.fullyUnstaked;
+
+      const amount = fmtAmount(s.totalStaked);
+
+      const row: ActivePackageRow = {
+        id: `${user}-${pid}-${s.idx}`,
+        packageName: `Package #${pid}`,
+        amount,
+        startDate: startSec ? new Date(startSec * 1000) : new Date(0),
+        nextClaimWindow: nextClaimSec ? new Date(nextClaimSec * 1000) : undefined,
+        status: pkg?.isActive ? "Active" : "Inactive",
+        stakeIndex: String(s.idx),
+        packageId: pid,
+        aprPct,
+
+        // Extended fields your mobile cards use
+        isFullyUnstaked: fullyUnstaked,
+        totalStakedWei: s.totalStaked,
+        claimedAprWei: s.claimedAPR,
+        aprBps: aprBps,
+        startTs: startSec || undefined,
+        nextClaimAt: nextClaimSec || undefined,
+        principalWithdrawnWei: s.withdrawnPrincipal,
+
+        pkgRules: pkg
+          ? {
+              durationInDays: Number(pkg.durationInDays ?? 0n),
+              aprBps: aprBps,
+              monthlyUnstake: Boolean(pkg.monthlyUnstake),
+              isActive: Boolean(pkg.isActive),
+              monthlyAPRClaimable: Boolean(pkg.monthlyAPRClaimable),
+              claimableIntervalSec: Number(pkg.claimableInterval ?? 0n),
+              principalLocked: Boolean(pkg.principalLocked),
+            }
+          : undefined,
+      };
+
+      out.push(row);
+    }
+
+    // Sort newest start first (matches your table sort)
+    out.sort((a, b) => (b.startDate?.getTime?.() ?? 0) - (a.startDate?.getTime?.() ?? 0));
+    return out;
+  }, [user]);
+
+  /* --------------------------------- Refresh -------------------------------------- */
   const refresh = useCallback(async () => {
-    // If we don't have a user, clear & stop.
-    if (!userId) {
+    if (!user) {
       setRows([]);
       setLoading(false);
       setError(null);
       return;
     }
-
-    const now = Date.now();
-    const meta = readMeta(userId);
-
-    // Use per-user lastFetchedAt from meta (no globals)
-    const isStale = now - (meta.lastFetchedAt || 0) > softMaxAgeMs;
-    const shouldFetchBase = !requireDirtyOrStale || isDirty(userId) || isStale;
-
-    const recentlyEmpty =
-      meta.lastRowCount === 0 && now - (meta.lastFetchedAt || 0) < EMPTY_COOLDOWN_MS;
-    const shouldFetch = shouldFetchBase && !recentlyEmpty;
+    if (!publicClient) {
+      setError("RPC client not ready");
+      setLoading(false);
+      return;
+    }
 
     setError(null);
 
-    const CK = `activeview:v3:${userId}`;
-    const cached = readCache(CK, ttlMs);
+    const meta = readMeta(user);
+    const now = Date.now();
+    const isStale = now - (meta.lastFetchedAt || 0) > softMaxAgeMs;
+    const shouldFetch = !requireDirtyOrStale || isDirty(user) || isStale;
+
+    const CK = `activeview:rpc:${user}`;
+    const cached = readCache<RpcPayload>(CK, ttlMs);
 
     if (cached) {
-      setRows(buildRows(cached.packages, cached.stakes));
+      setRows(buildRows(cached));
       setLoading(false);
-      if (!shouldFetch) return; // ✅ up-to-date enough; skip network
+      if (!shouldFetch) return;
     } else {
-      // IMPORTANT FIX:
-      // If we have no cache *and* shouldn't fetch (e.g., recently empty),
-      // do NOT leave loading=true forever. Show empty immediately.
-      if (!shouldFetch) {
-        setRows([]);
-        setLoading(false);
-        return;
-      }
       setLoading(true);
     }
 
     try {
-      const data = await withTimeout(
-        subgraph.request<any>(Q_ACTIVE_VIEW, { id: userId }),
-        15000
-      );
+      const payload = await loadRpc();
       if (abortRef.current) return;
 
-      const payload = {
-        packages: (data?.packages || []) as RawPkg[],
-        stakes: (data?.stakes || []) as RawStake[],
-      };
-
-      const rowCount = payload.stakes.length;
-      const fetchedAt = Date.now();
-
-      writeMeta(userId, {
-        lastFetchedAt: fetchedAt,
-        lastRowCount: rowCount,
-        ...(rowCount > 0 ? { lastNonEmptyAt: fetchedAt } : {}),
-      });
-
       writeCache(CK, payload);
-      setRows(buildRows(payload.packages, payload.stakes));
+      writeMeta(user, { lastFetchedAt: Date.now(), lastRowCount: payload.stakes.length });
 
-      // Clear dirty flag for this user after a successful fetch
-      setDirty(userId, false);
+      setRows(buildRows(payload));
+      setDirty(user, false);
     } catch (e: any) {
       if (!abortRef.current) setError(e?.message || "Failed to load");
     } finally {
       if (!abortRef.current) setLoading(false);
     }
-  }, [userId, ttlMs, buildRows, requireDirtyOrStale, softMaxAgeMs]);
+  }, [user, ttlMs, buildRows, loadRpc, publicClient, requireDirtyOrStale, softMaxAgeMs]);
 
+  /* ---------------------------------- Effects ------------------------------------- */
   useEffect(() => {
     abortRef.current = false;
     refresh();
@@ -313,17 +399,17 @@ export function useActiveStakes(opts: {
     };
   }, [refresh]);
 
-  // Refresh on relevant local events
+  // Invalidate & refresh on local app events (same as your existing version)
   useEffect(() => {
     let timer: number | null = null;
 
     const invalidate: EventListener = () => {
-      if (!userId) return;
-      setDirty(userId, true);
+      if (!user) return;
+      setDirty(user, true);
       if (timer != null) return;
       timer = window.setTimeout(() => {
         timer = null;
-        const CK = `activeview:v3:${userId}`;
+        const CK = `activeview:rpc:${user}`;
         MEM.delete(CK);
         try {
           localStorage.removeItem(CK);
@@ -340,7 +426,6 @@ export function useActiveStakes(opts: {
       "unstaked",
       "staked",
     ];
-
     names.forEach((n) => window.addEventListener(n, invalidate));
     return () => {
       if (timer != null) {
@@ -349,7 +434,7 @@ export function useActiveStakes(opts: {
       }
       names.forEach((n) => window.removeEventListener(n, invalidate));
     };
-  }, [refresh, userId]);
+  }, [refresh, user]);
 
   return { rows, loading, error, refresh };
 }

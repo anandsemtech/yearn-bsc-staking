@@ -1,15 +1,27 @@
 <!doctype html>
 <html lang="en" class="dark">
 <head>
-<meta charset="UTF-8" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>YearnTogether Staking</title>
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover">
-
-<title>YearnTogether Staking</title>
+  <!-- Top-level overlay root styles (bullet-proof z-index & stacking context) -->
+  <style>
+    #overlay-root {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647; /* sky-high */
+      pointer-events: none; /* confetti won’t block clicks */
+      isolation: isolate;   /* own stacking context above everything */
+    }
+  </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="module" src="/src/main.tsx"></script>
+  <div id="root"></div>
+
+  <!-- 👇 Add this right after #root so portals render truly above all app UI -->
+  <div id="overlay-root"></div>
+
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

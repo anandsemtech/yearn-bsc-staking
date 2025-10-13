@@ -230,7 +230,7 @@ export default function Dashboard() {
         />
       )}
 
-      <GlassPanel title="Available Packages" className="mt-8" id="available-packages">
+      <GlassPanel className="mt-8" id="available-packages">
         <PackageCards onStakePackage={setSelectedPackage} />
       </GlassPanel>
 
@@ -240,7 +240,7 @@ export default function Dashboard() {
 
       {/* ⭐ NEW: Affiliate Star Journey — only when user has preferred NFT badge */}
       {showStarJourney && (
-        <GlassPanel title="Affiliate Star Journey" className="mt-0" id="star-journey">
+        <GlassPanel title="Affiliate Star Journey" className="mt-8" id="star-journey">
           <StarJourneyPanel
             address={address}
             goldenStarWindowDays={30}

@@ -1,7 +1,8 @@
 // src/components/ReferralClaimsSheetContent.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Award, Star, TrendingUp, Zap, RefreshCcw, Clock } from "lucide-react";
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
+
 import { formatUnits } from "viem";
 import { bsc } from "viem/chains";
 import {
@@ -12,8 +13,9 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 
-import { useEarningsSG } from "@/hooks/useEarningsSG";
+import { useEarningsStable } from "@/hooks/useEarningsStable";
 import { STAKING_ABI } from "@/web3/abi/stakingAbi";
+import { openTxOverlay } from "@/lib/txOverlay";
 
 const PROXY =
   (import.meta.env.VITE_BASE_CONTRACT_ADDRESS as `0x${string}`) ||
@@ -82,7 +84,7 @@ export default function ReferralClaimsSheetContent({
   pendingGoldenStarRewards = 0,
   variant = "sheet",
 }: Props) {
-  const dense = variant === "sheet"; // sheet = tighter font, taller hit targets, bigger gaps
+  const dense = variant === "sheet";
   const padBlock = dense ? "space-y-5" : "space-y-6";
 
   const { address } = useAccount();
@@ -93,7 +95,8 @@ export default function ReferralClaimsSheetContent({
   const { writeContractAsync, data: txHash, isPending: writing } = useWriteContract();
   const { isLoading: confirming, isSuccess: okTx } = useWaitForTransactionReceipt({ hash: txHash });
 
-  const { totals, loading: sgLoading, coolingDown, refetch, refetchAfterMutation } = useEarningsSG(address);
+  const { totals, loading: rpcLoading, coolingDown, refetch, refetchAfterMutation } =
+    useEarningsStable(address);
 
   const referralAvailable = useMemo(
     () => Number(formatUnits(totals.availSum ?? 0n, 18)),
@@ -110,17 +113,44 @@ export default function ReferralClaimsSheetContent({
   const [tab, setTab] = useState<TabKey>("referral");
   const [err, setErr] = useState<string | null>(null);
 
+  // --- Optimistic locks (per section) ---
+  const [lockReferral, setLockReferral] = useState(false);
+  const [lockStar, setLockStar] = useState(false);
+  const [lockGolden, setLockGolden] = useState(false);
+  const [lastAction, setLastAction] = useState<TabKey | null>(null);
+
   const txBusy = writing || confirming;
-  const busy = sgLoading || coolingDown;
+  const busy = rpcLoading || coolingDown;
 
   const canReferral =
-    !!address && chainId === REQUIRED && (totals.availSum ?? 0n) > 0n && !txBusy;
-  const canStar = !!address && chainId === REQUIRED && currentStarLevelEarnings > 0 && !txBusy;
-  const canGolden = !!address && chainId === REQUIRED && pendingGoldenStarRewards > 0 && !txBusy;
+    !!address &&
+    chainId === REQUIRED &&
+    (totals.availSum ?? 0n) > 0n &&
+    !txBusy &&
+    !lockReferral;
+  const canStar =
+    !!address &&
+    chainId === REQUIRED &&
+    currentStarLevelEarnings > 0 &&
+    !txBusy &&
+    !lockStar;
+  const canGolden =
+    !!address &&
+    chainId === REQUIRED &&
+    pendingGoldenStarRewards > 0 &&
+    !txBusy &&
+    !lockGolden;
+
+  const isUserRejected = (e: any) => {
+    const msg = (e?.shortMessage || e?.message || "").toLowerCase();
+    return e?.code === 4001 || /user rejected/i.test(msg) || /rejected the request/i.test(msg);
+  };
 
   // on-chain claims
   const onClaimReferral = async () => {
     setErr(null);
+    setLockReferral(true);
+    setLastAction("referral");
     try {
       if (!pc) throw new Error("No public client");
       await pc.simulateContract({
@@ -131,20 +161,33 @@ export default function ReferralClaimsSheetContent({
         chain: bsc,
         args: [],
       });
-      await writeContractAsync({
+      const hash = (await writeContractAsync({
         address: PROXY,
         abi: STAKING_ABI,
         functionName: "claimReferralRewards",
         chainId: bsc.id,
         args: [],
+      })) as Hex;
+
+      openTxOverlay(hash, "Claiming referral rewards…", {
+        doneEvent: "referral:claimed",
+        successText: "Referral rewards claimed!",
+        celebrateMs: 1800,
       });
     } catch (e: any) {
-      setErr(e?.shortMessage || e?.message || "Claim failed");
+      if (isUserRejected(e)) {
+        setLockReferral(false); // unlock on cancel
+      } else {
+        setLockReferral(false); // unlock on failure (so user can retry)
+        setErr(e?.shortMessage || e?.message || "Claim failed");
+      }
     }
   };
 
   const onClaimStar = async () => {
     setErr(null);
+    setLockStar(true);
+    setLastAction("star");
     try {
       if (!pc) throw new Error("No public client");
       await pc.simulateContract({
@@ -155,20 +198,33 @@ export default function ReferralClaimsSheetContent({
         chain: bsc,
         args: [],
       });
-      await writeContractAsync({
+      const hash = (await writeContractAsync({
         address: PROXY,
         abi: STAKING_ABI,
         functionName: "claimStarLevelRewards",
         chainId: bsc.id,
         args: [],
+      })) as Hex;
+
+      openTxOverlay(hash, "Claiming star rewards…", {
+        doneEvent: "star:claimed",
+        successText: "Star rewards claimed!",
+        celebrateMs: 1800,
       });
     } catch (e: any) {
-      setErr(e?.shortMessage || e?.message || "Claim failed");
+      if (isUserRejected(e)) {
+        setLockStar(false);
+      } else {
+        setLockStar(false);
+        setErr(e?.shortMessage || e?.message || "Claim failed");
+      }
     }
   };
 
   const onClaimGolden = async () => {
     setErr(null);
+    setLockGolden(true);
+    setLastAction("golden");
     try {
       if (!pc) throw new Error("No public client");
       await pc.simulateContract({
@@ -179,21 +235,48 @@ export default function ReferralClaimsSheetContent({
         chain: bsc,
         args: [],
       });
-      await writeContractAsync({
+      const hash = (await writeContractAsync({
         address: PROXY,
         abi: STAKING_ABI,
         functionName: "claimGoldenStarRewards",
         chainId: bsc.id,
         args: [],
+      })) as Hex;
+
+      openTxOverlay(hash, "Claiming golden rewards…", {
+        doneEvent: "golden:claimed",
+        successText: "Golden rewards claimed!",
+        celebrateMs: 1800,
       });
     } catch (e: any) {
-      setErr(e?.shortMessage || e?.message || "Claim failed");
+      if (isUserRejected(e)) {
+        setLockGolden(false);
+      } else {
+        setLockGolden(false);
+        setErr(e?.shortMessage || e?.message || "Claim failed");
+      }
     }
   };
 
+  // After tx success, keep the lock until refetchAfterMutation finishes.
   useEffect(() => {
-    if (okTx) void refetchAfterMutation();
-  }, [okTx, refetchAfterMutation]);
+    if (!okTx || !lastAction) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await refetchAfterMutation();
+      } finally {
+        if (cancelled) return;
+        if (lastAction === "referral") setLockReferral(false);
+        if (lastAction === "star") setLockStar(false);
+        if (lastAction === "golden") setLockGolden(false);
+        setLastAction(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [okTx, lastAction, refetchAfterMutation]);
 
   return (
     <div className={padBlock}>
@@ -214,7 +297,7 @@ export default function ReferralClaimsSheetContent({
                 : "border-white/15 hover:bg-white/5 text-white",
             ].join(" ")}
           >
-            <RefreshCcw className={"h-4 w-4 " + (sgLoading ? "animate-spin" : "")} />
+            <RefreshCcw className={"h-4 w-4 " + (rpcLoading ? "animate-spin" : "")} />
             <span className="hidden sm:inline">{busy ? "Cooling down…" : "Refresh"}</span>
           </button>
         </div>
@@ -229,7 +312,7 @@ export default function ReferralClaimsSheetContent({
           ariaLabel="Referral"
         >
           <TrendingUp className="w-4.5 h-4.5 text-blue-300" />
-          <span >Referral</span>
+          <span>Referral</span>
         </TabBtn>
         <TabBtn
           active={tab === "star"}
@@ -238,7 +321,7 @@ export default function ReferralClaimsSheetContent({
           ariaLabel="Star"
         >
           <Star className="w-4.5 h-4.5 text-purple-300" />
-          <span >Star</span>
+          <span>Star</span>
         </TabBtn>
         <TabBtn
           active={tab === "golden"}
@@ -247,7 +330,7 @@ export default function ReferralClaimsSheetContent({
           ariaLabel="Golden"
         >
           <Award className="w-4.5 h-4.5 text-amber-300" />
-          <span >Golden</span>
+          <span>Golden</span>
         </TabBtn>
       </div>
 
@@ -296,7 +379,7 @@ export default function ReferralClaimsSheetContent({
                           : "bg-gray-700 text-gray-400 cursor-not-allowed",
             ].join(" ")}
           >
-            {txBusy ? (
+            {txBusy || lockReferral ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
                 Processing…
@@ -333,7 +416,7 @@ export default function ReferralClaimsSheetContent({
                       : "bg-gray-700 text-gray-400 cursor-not-allowed",
             ].join(" ")}
           >
-            {txBusy ? (
+            {txBusy || lockStar ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
                 Processing…
@@ -370,7 +453,7 @@ export default function ReferralClaimsSheetContent({
                         : "bg-gray-700 text-gray-400 cursor-not-allowed",
             ].join(" ")}
           >
-            {txBusy ? (
+            {txBusy || lockGolden ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
                 Processing…

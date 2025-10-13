@@ -15,6 +15,10 @@ import Header from "@/components/Header";
 import ToastHub from "@/components/ui/ToastHub";
 import { captureReferrerFromLocation } from "@/lib/referrer";
 
+// ⬇️ Mount this overlay once for all tx confirmations
+import TxConfirmOverlay from "@/components/TxConfirmOverlay";
+
+
 /** One-time global capture of ?ref=0x... on initial mount */
 function RefCaptureOnce() {
   useEffect(() => {
@@ -67,7 +71,12 @@ function Shell() {
       <main>
         <Outlet />
       </main>
+
+      {/* Global toasts */}
       <ToastHub />
+
+      {/* 🔥 Global tx confirmation overlay (spins, then confetti on success) */}
+      <TxConfirmOverlay />
     </div>
   );
 }

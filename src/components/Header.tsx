@@ -175,8 +175,6 @@ const BalancesPopover: React.FC<{
           </div>
         </div>
 
-
-        
         <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-4 space-y-2">
           <Row symbol={native.symbol} value={native.value} />
           {rows.map((r) => (
@@ -194,6 +192,8 @@ const BalancesPopover: React.FC<{
     </>
   );
 };
+
+type ChipHero = { imageUrl: string; title: string; address: Address };
 
 const Header: React.FC = () => {
   const { isConnected, address } = useAccount();
@@ -213,17 +213,48 @@ const Header: React.FC = () => {
   const [showBalances, setShowBalances] = useState(false);
   const walletBtnRef = useRef<HTMLButtonElement>(null);
 
-  const [honoraryChip, setHonoraryChip] = useState<null | { imageUrl: string; title: string }>(null);
+  // ---------- Honorary chip state (wallet-aware) ----------
+  const [honoraryChip, setHonoraryChip] = useState<ChipHero | null>(null);
+
+  // Accept minimized hero from popup (expects detail: { imageUrl, title, address })
   useEffect(() => {
     const onMin = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { imageUrl: string; title: string };
-      if (detail?.imageUrl) setHonoraryChip({ imageUrl: detail.imageUrl, title: detail.title ?? "Honorary Badge" });
+      const d = (e as CustomEvent).detail as Partial<ChipHero> | undefined;
+      if (!d?.imageUrl) return;
+      // If event didn't include address (older senders), fall back to current address
+      const owner = (d.address as Address) || (address as Address);
+      if (!owner) return;
+      setHonoraryChip({
+        imageUrl: d.imageUrl!,
+        title: d.title ?? "Honorary Badge",
+        address: owner,
+      });
     };
     window.addEventListener("honorary:minimize", onMin as EventListener);
     return () => window.removeEventListener("honorary:minimize", onMin as EventListener);
-  }, []);
+  }, [address]);
 
-  // 🔗 Listen to footer events
+  // Clear chip when wallet changes or disconnects
+  useEffect(() => {
+    if (!isConnected || !address) {
+      setHonoraryChip(null);
+      return;
+    }
+    // If chip belongs to a different wallet, clear it
+    if (honoraryChip && honoraryChip.address?.toLowerCase() !== address.toLowerCase()) {
+      setHonoraryChip(null);
+    }
+  }, [isConnected, address]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Only show chip if it belongs to the current wallet
+  const visibleChip = useMemo(() => {
+    if (!honoraryChip || !address) return null;
+    return honoraryChip.address?.toLowerCase() === address.toLowerCase() ? honoraryChip : null;
+  }, [honoraryChip, address]);
+
+  // -------------------------------------------------------
+
+  // Footer events
   useEffect(() => {
     const openBalances = () => setShowBalances(true);
     const openSettings = () => setShowSettings(true);
@@ -252,15 +283,20 @@ const Header: React.FC = () => {
   const openAppKit = () => open();
 
   const handleDisconnect = async () => {
-    try { await disconnectAsync(); }
-    finally { navigate("/", { replace: true }); }
+    try {
+      await disconnectAsync();
+    } finally {
+      navigate("/", { replace: true });
+    }
   };
 
   async function ensureBsc(): Promise<void> {
     if (!walletClient) return;
     const targetHex = `0x${bsc.id.toString(16)}`;
     let currentHex: string | null = null;
-    try { currentHex = (await walletClient.request({ method: "eth_chainId" })) as string; } catch {}
+    try {
+      currentHex = (await walletClient.request({ method: "eth_chainId" })) as string;
+    } catch {}
     if (currentHex?.toLowerCase() === targetHex.toLowerCase()) return;
     try {
       await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
@@ -269,20 +305,23 @@ const Header: React.FC = () => {
       if (!needsAdd) return;
       await walletClient.request({
         method: "wallet_addEthereumChain",
-        params: [{
-          chainId: targetHex,
-          chainName: "BSC Mainnet",
-          rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
-          nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
-          blockExplorerUrls: ["https://bscscan.com"],
-        }],
+        params: [
+          {
+            chainId: targetHex,
+            chainName: "BSC Mainnet",
+            rpcUrls: [import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"],
+            nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+            blockExplorerUrls: ["https://bscscan.com"],
+          },
+        ],
       });
       await walletClient.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
     }
   }
 
   const { data: nativeBal } = useBalance({
-    address, query: { enabled: Boolean(address) },
+    address,
+    query: { enabled: Boolean(address) },
   });
 
   const [erc20, setErc20] = useState<
@@ -336,7 +375,10 @@ const Header: React.FC = () => {
 
     load();
     const id = setInterval(load, 15_000);
-    return () => { disposed = true; clearInterval(id); };
+    return () => {
+      disposed = true;
+      clearInterval(id);
+    };
   }, [address, publicClient, isConnected]);
 
   const popRows = useMemo(
@@ -376,7 +418,8 @@ const Header: React.FC = () => {
                     ref={walletBtnRef}
                     onClick={() => setShowBalances((v) => !v)}
                     className="p-2 rounded-lg hover:bg-gray-800 transition-colors"
-                    aria-label="Wallet balances" title="Wallet balances"
+                    aria-label="Wallet balances"
+                    title="Wallet balances"
                   >
                     <Wallet className="w-5 h-5 text-gray-300" />
                   </button>
@@ -384,32 +427,52 @@ const Header: React.FC = () => {
                   <button
                     onClick={openAppKit}
                     className="p-2 rounded-lg hover:bg-gray-800 transition-colors"
-                    aria-label="Open wallet" title="Open wallet"
+                    aria-label="Open wallet"
+                    title="Open wallet"
                   >
                     <Zap className="w-5 h-5 text-gray-300" />
                   </button>
 
-                  {honoraryChip &&
+                  {/* Desktop honorary chip anchor + chip */}
+                  <div id="honorary-chip-anchor" className="flex items-center">
+                    {visibleChip && (
+                      <HonoraryBadgeChip
+                        key={`${address || "noaddr"}-${visibleChip.imageUrl || "nil"}`}
+                        imageUrl={visibleChip.imageUrl}
+                        title={visibleChip.title}
+                        onClick={() => window.dispatchEvent(new Event("honorary:open"))}
+                      />
+                    )}
+                  </div>
+
+                  {/* Mobile floating chip (portal) for convenience */}
+                  {visibleChip &&
                     createPortal(
                       <motion.button
+                        key={`m-${address || "noaddr"}-${visibleChip.imageUrl || "nil"}`}
                         onClick={() => window.dispatchEvent(new Event("honorary:open"))}
                         className="md:hidden fixed z-[1100] top-[calc(env(safe-area-inset-top,0px)+10px)] right-[calc(env(safe-area-inset-right,0px)+12px)] rounded-full border border-white/20 bg-white/12 backdrop-blur p-1.5 shadow-md active:scale-95"
                         initial={{ opacity: 0, scale: 0.9, y: -6 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
-                        transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 22 }}
                         aria-label="Open Honorary Badge"
                       >
                         <motion.img
-                          src={honoraryChip.imageUrl}
-                          alt={honoraryChip.title}
+                          src={visibleChip.imageUrl}
+                          alt={visibleChip.title}
                           className="w-7 h-7 rounded-md ring-1 ring-white/25 object-cover"
-                          animate={{ boxShadow: ["0 0 0px rgba(0,0,0,0)", "0 0 10px rgba(255,195,70,0.35)", "0 0 0px rgba(0,0,0,0)"] }}
+                          animate={{
+                            boxShadow: [
+                              "0 0 0px rgba(0,0,0,0)",
+                              "0 0 10px rgba(255,195,70,0.35)",
+                              "0 0 0px rgba(0,0,0,0)",
+                            ],
+                          }}
                           transition={{ repeat: Infinity, duration: 2.8 }}
                         />
                       </motion.button>,
                       document.body
-                    )
-                  }
+                    )}
 
                   <button
                     onClick={() => setShowSettings(true)}
@@ -427,7 +490,8 @@ const Header: React.FC = () => {
                         <button
                           onClick={copyAddress}
                           className="p-1 hover:bg-green-800 rounded transition-colors"
-                          title="Copy address" aria-label="Copy address"
+                          title="Copy address"
+                          aria-label="Copy address"
                         >
                           <Copy className="w-3 h-3 text-green-400" />
                         </button>
@@ -482,9 +546,7 @@ const Header: React.FC = () => {
       </header>
 
       {/* Settings Modal */}
-      {showSettings && isConnected && (
-        <UserSettingsModal onClose={() => setShowSettings(false)} />
-      )}
+      {showSettings && isConnected && <UserSettingsModal onClose={() => setShowSettings(false)} />}
     </>
   );
 };

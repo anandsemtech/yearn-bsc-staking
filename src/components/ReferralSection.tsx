@@ -1,3 +1,4 @@
+// src/components/ReferralSection.tsx
 // Mobile: AppKit-style bottom sheets (Levels / My Claims)
 // Desktop: inline explorer (always open). Uses lib/subgraph via useReferralProfile.
 
@@ -9,6 +10,7 @@ import {
   Users, Search, Filter, Link as LinkIcon, X, PieChart
 } from "lucide-react";
 import { useReferralProfile, fmt } from "@/hooks/useReferralProfile";
+import { useEarningsRPC } from "@/hooks/useEarningsRPC"; // ← NEW
 
 import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
 
@@ -78,6 +80,8 @@ function SheetPortal({
   bottomGapPx?: number;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const rafRef = useRef<number | null>(null);
   const [pxHeight, setPxHeight] = useState<number | null>(null);
 
   useEffect(() => {
@@ -91,27 +95,45 @@ function SheetPortal({
     if (!open || !bodyRef.current) return;
 
     const headerPx = 64; // header height (grab bar + title)
+
     const compute = () => {
-      const body = bodyRef.current!;
-      const content = body.scrollHeight;
+      const node = bodyRef.current;
+      if (!node || !node.isConnected) return;
+      const content = node.scrollHeight;
       const desired = headerPx + content + bottomGapPx;
       const cap = Math.round((window.innerHeight || 0) * (maxVh / 100));
       setPxHeight(Math.min(desired, cap));
     };
 
-    compute();
+    const scheduleCompute = () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(compute);
+    };
+
+    scheduleCompute();
 
     const RO: any = (window as any).ResizeObserver;
-    const ro = RO ? new RO(() => compute()) : null;
-    if (ro && bodyRef.current) ro.observe(bodyRef.current);
+    if (RO) {
+      if (!roRef.current) {
+        roRef.current = new RO(() => scheduleCompute());
+      }
+      if (bodyRef.current) roRef.current?.observe(bodyRef.current); // <-- replace line 118 with this
 
-    const onResize = () => compute();
+    }
+
+    const onResize = () => scheduleCompute();
     window.addEventListener("resize", onResize);
 
     return () => {
-      if (ro && bodyRef.current) ro.unobserve(bodyRef.current);
-      ro?.disconnect?.();
       window.removeEventListener("resize", onResize);
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (roRef.current) {
+        try { roRef.current.disconnect(); } catch {}
+        roRef.current = null;
+      }
     };
   }, [open, maxVh, bottomGapPx]);
 
@@ -242,6 +264,12 @@ const ReferralSection: React.FC<Props> = ({
   const isMobile = useIsMobile(640);
   const { address } = useAccount();
 
+  // NEW: read lifetime referral via RPC
+  const { totals: rpcTotals, loading: rpcLoading } = useEarningsRPC(address || undefined);
+  const lifetimeReferralStr = rpcLoading
+    ? "…"
+    : fmt(rpcTotals?.lifeSum ?? 0n, 18); // lifeSum is bigint wei; tokens are 18d
+
   // Light profile fetch for the card/preview
   const { loading, decimals, myTotalYY, levels, invalidate } = useReferralProfile(
     (address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
@@ -259,8 +287,6 @@ const ReferralSection: React.FC<Props> = ({
   // SSR-safe link
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const link = origin && address ? `${origin}?ref=${address}` : "";
-
-  // (was: copied state) — removed as we now use icon-only component per control
 
   const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
   const [claimsOpen, setClaimsOpen] = useState(false);  // My Claims (responsive)
@@ -399,7 +425,7 @@ const ReferralSection: React.FC<Props> = ({
             {!loading && L1.rows.length > 0 && (
               <div className="space-y-2 sm:hidden">
                 {L1.rows.slice(0, 6).map((r, i) => (
-                  <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
+                  <div key={`${r.addr}-${i}`} className="rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
                       <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
@@ -412,8 +438,8 @@ const ReferralSection: React.FC<Props> = ({
 
             {/* Desktop: inline explorer — ALWAYS OPEN */}
             {!isMobile && (
-              <div className="mt-3 grid sm:grid-cols-[260px_1fr] gap-3">
-                {/* Level rail */}
+              <div className="mt-3 grid sm:grid-cols-[300px_1fr] gap-3">
+                {/* Level rail (spacious rows) */}
                 <aside className="rounded-2xl ring-1 ring-white/10 bg-[#151b2b]/80 p-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-[12px] font-semibold text-white">Levels</div>
@@ -436,28 +462,21 @@ const ReferralSection: React.FC<Props> = ({
                     </label>
                   </div>
 
-                  <div className="grid grid-cols-5 sm:block gap-1 max-h-[40vh] overflow-auto pr-1">
+                  <div className="space-y-2 max-h-[40vh] overflow-auto pr-1">
                     {filteredIdsMain.map((lvl) => {
                       const active = lvl === effectiveMain;
                       const count = levelMap.get(lvl)?.rows?.length ?? 0;
                       const sumYY = levelMap.get(lvl)?.totalYY ?? 0n;
                       return (
-                        <button
+                        <LevelRow
                           key={lvl}
+                          lvl={lvl}
+                          count={count}
+                          sumYY={sumYY}
+                          active={active}
+                          decimals={decimals?.yy ?? 18}
                           onClick={() => { setLevel(lvl); setPage(1); }}
-                          className={[
-                            "rounded-xl px-2.5 py-1.5 ring-1 text-[12px] w-full text-left",
-                            active
-                              ? "bg-gradient-to-r from-purple-600/70 to-blue-600/70 ring-white/20 text-white"
-                              : "bg-white/8 hover:bg-white/12 ring-white/10 text-gray-100",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold">L{lvl}</span>
-                            <span className="text-[11px] text-gray-300">{count}</span>
-                          </div>
-                          <div className="mt-0.5 text-[11px] text-indigo-200">YY {fmt(sumYY, decimals?.yy)}</div>
-                        </button>
+                        />
                       );
                     })}
                     {filteredIdsMain.length === 0 && <div className="text-[12px] text-gray-400">No levels</div>}
@@ -499,12 +518,17 @@ const ReferralSection: React.FC<Props> = ({
                       </div>
                     )}
                     {!loading && visibleMain.map((r, i) => (
-                      <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
-                        <div className="flex items-center justify-between">
+                      <div key={`${r.addr}-${i}`} className="rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
+                        <div className="flex items-center justify-between gap-3">
                           <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
-                          <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                          <div className="text-right">
+                            <div className="text-[11px] text-gray-300/80 leading-none">Total YY</div>
+                            <div className="font-mono text-[16px] font-bold text-emerald-300 leading-none">
+                              {fmt(r.totalYY, decimals?.yy)}
+                            </div>
+                          </div>
                         </div>
-                        <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
+                        <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
                       </div>
                     ))}
 
@@ -550,6 +574,7 @@ const ReferralSection: React.FC<Props> = ({
             referral: placeholders.referral ?? "—",
             star: placeholders.star ?? "—",
             golden: placeholders.golden ?? "—",
+            lifetimeReferral: lifetimeReferralStr, // ← from RPC
           }}
           levelMap={levelMap}
           decimals={decimals?.yy ?? 18}
@@ -559,7 +584,6 @@ const ReferralSection: React.FC<Props> = ({
           onlyNonEmpty={onlyNonEmpty} setOnlyNonEmpty={setOnlyNonEmpty}
         />
       </SheetPortal>
-
 
       {/* My Claims — keep both variants mounted; gate with `open` */}
       <SheetPortal
@@ -608,12 +632,10 @@ function CopyIconButton({ text, className }: { text: string; className?: string 
   async function doCopy() {
     try {
       await navigator.clipboard.writeText(text);
-      // haptics on supported devices
       if (navigator.vibrate) navigator.vibrate(10);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
-      // fallback
       const ta = document.createElement("textarea");
       ta.value = text;
       ta.style.position = "fixed";
@@ -669,11 +691,56 @@ function CopyIconButton({ text, className }: { text: string; className?: string 
 }
 
 /* ============================================================
+   LevelRow — spacious, readable level pill
+============================================================ */
+function LevelRow({
+  lvl, count, sumYY, active, onClick, decimals,
+}: {
+  lvl: number;
+  count: number;
+  sumYY: bigint;
+  active?: boolean;
+  onClick?: () => void;
+  decimals: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "w-full rounded-2xl px-3.5 py-3 ring-1 text-left flex items-center gap-3",
+        active
+          ? "bg-gradient-to-r from-purple-600/60 to-blue-600/60 ring-white/20"
+          : "bg-white/8 hover:bg-white/12 ring-white/10",
+      ].join(" ")}
+    >
+      <div className="shrink-0 rounded-xl w-9 h-9 flex items-center justify-center
+                      bg-white/10 font-semibold text-white">
+        L{lvl}
+      </div>
+
+      <div className="min-w-0">
+        <div className="text-[13px] text-white font-semibold">Level {lvl}</div>
+        <div className="text-[12px] text-gray-300/90">
+          {count} referees • YY {fmt(sumYY, decimals)}
+        </div>
+      </div>
+
+      <div className="ml-auto text-right">
+        <div className="text-[11px] text-gray-300/80 uppercase tracking-wide">Total YY</div>
+        <div className="font-mono text-[16px] sm:text-[18px] font-bold text-emerald-300 leading-none">
+          {fmt(sumYY, decimals)}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* ============================================================
    Tabs (mobile sheet content)
 ============================================================ */
 function Tabs(props: {
   link: string;
-  tiles: { staked: string; referral: string; star: string; golden: string };
+  tiles: { staked: string; referral: string; star: string; golden: string; lifetimeReferral: string };
   levelMap: Map<number, { totalYY: bigint; rows: { addr: string; stakes: number; totalYY: bigint }[] }>;
   decimals: number;
   page: number; setPage: (n: number) => void;
@@ -724,7 +791,6 @@ function Tabs(props: {
             <div className="text-[12px] text-gray-300/90 mb-1">Share Link</div>
             <div className="flex items-center gap-2 rounded-xl bg-white/8 px-3 py-2 ring-1 ring-white/10">
               <span className="text-[12px] text-gray-100 font-mono truncate" title={link}>{link}</span>
-              {/* Icon-only copy with feedback */}
               <CopyIconButton text={link} />
             </div>
           </div>
@@ -740,12 +806,17 @@ function Tabs(props: {
           <div className="p-3 space-y-2 max-h-[50vh] overflow-auto">
             {L1.rows.length === 0 && <div className="text-[12px] text-gray-300/90">No referees at this level.</div>}
             {L1.rows.slice(0, 60).map((r, i) => (
-              <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
-                <div className="flex items-center justify-between">
+              <div key={`${r.addr}-${i}`} className="rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
+                <div className="flex items-center justify-between gap-3">
                   <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
-                  <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                  <div className="text-right">
+                    <div className="text-[11px] text-gray-300/80 leading-none">Total YY</div>
+                    <div className="font-mono text-[16px] font-bold text-emerald-300 leading-none">
+                      {fmt(r.totalYY, decimals)}
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals)}</div>
+                <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
               </div>
             ))}
           </div>
@@ -775,26 +846,23 @@ function Tabs(props: {
                 <Filter className="w-4 h-4" /> Non-empty
               </label>
             </div>
-            <div className="grid grid-cols-5 gap-1 max-h-[35vh] overflow-auto pr-1">
+
+            {/* Spacious list of levels */}
+            <div className="space-y-2 max-h-[35vh] overflow-auto pr-1">
               {filteredIds.map((lvl) => {
                 const active = lvl === effective;
                 const count = levelMap.get(lvl)?.rows?.length ?? 0;
                 const sumYY = levelMap.get(lvl)?.totalYY ?? 0n;
                 return (
-                  <button
+                  <LevelRow
                     key={lvl}
+                    lvl={lvl}
+                    count={count}
+                    sumYY={sumYY}
+                    active={active}
+                    decimals={decimals}
                     onClick={() => { setLevel(lvl); setPage(1); }}
-                    className={[
-                      "rounded-xl px-2.5 py-1.5 ring-1 text-[12px] w-full text-left",
-                      active ? "bg-white/15 ring-white/20 text-white" : "bg-white/8 hover:bg-white/12 ring-white/10 text-gray-100",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold">L{lvl}</span>
-                      <span className="text-[11px] text-gray-300">{count}</span>
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-indigo-200">YY {fmt(sumYY, decimals)}</div>
-                  </button>
+                  />
                 );
               })}
               {filteredIds.length === 0 && <div className="text-[12px] text-gray-400">No levels</div>}
@@ -830,12 +898,17 @@ function Tabs(props: {
                 </div>
               )}
               {visible.map((r, i) => (
-                <div key={`${r.addr}-${i}`} className="rounded-xl bg-white/8 p-3 ring-1 ring-white/10">
-                  <div className="flex items-center justify-between">
+                <div key={`${r.addr}-${i}`} className="rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
+                  <div className="flex items-center justify-between gap-3">
                     <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
-                    <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                    <div className="text-right">
+                      <div className="text-[11px] text-gray-300/80 leading-none">Total YY</div>
+                      <div className="font-mono text-[16px] font-bold text-emerald-300 leading-none">
+                        {fmt(r.totalYY, decimals)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals)}</div>
+                  <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
                 </div>
               ))}
 
@@ -870,6 +943,8 @@ function Tabs(props: {
           <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral" value={tiles.referral} />
           <Tile icon={<Star className="w-4.5 h-4.5" />} label="Star" value={tiles.star} />
           <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden" value={tiles.golden} />
+          {/* Lifetime from RPC */}
+          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Lifetime (Referral)" value={tiles.lifetimeReferral} />
         </div>
       )}
     </div>
