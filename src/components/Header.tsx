@@ -330,7 +330,7 @@ const Header: React.FC = () => {
     YY: { symbol: "YY", decimals: 18, value: 0n },
     SY: { symbol: "SY", decimals: 18, value: 0n },
     PY: { symbol: "PY", decimals: 18, value: 0n },
-    USDT: { symbol: "USDT", decimals: 6, value: 0n },
+    USDT: { symbol: "USDT", decimals: 18, value: 0n },
   });
 
   useEffect(() => {
