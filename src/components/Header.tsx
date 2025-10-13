@@ -55,7 +55,7 @@ const TOKENS: ErcRow[] = [
   { key: "YY", address: YYEARN, fallbackDecimals: 18, label: "YY" },
   { key: "SY", address: SYEARN, fallbackDecimals: 18, label: "SY" },
   { key: "PY", address: PYEARN, fallbackDecimals: 18, label: "PY" },
-  { key: "USDT", address: USDT, fallbackDecimals: 6, label: "USDT" },
+  { key: "USDT", address: USDT, fallbackDecimals: 18, label: "USDT" },
 ];
 
 const Row: React.FC<{ symbol: string; value: string }> = ({ symbol, value }) => (
