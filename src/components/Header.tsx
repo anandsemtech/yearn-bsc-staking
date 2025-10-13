@@ -391,7 +391,7 @@ const Header: React.FC = () => {
   );
 
   const nativeRow = useMemo(() => {
-    const symbol = nativeBal?.symbol || "ETH";
+    const symbol = nativeBal?.symbol || "BNB";
     const value =
       nativeBal?.value && typeof nativeBal.decimals === "number"
         ? fmt(nativeBal.value, nativeBal.decimals)
