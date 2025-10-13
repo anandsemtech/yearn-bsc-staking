@@ -157,6 +157,31 @@ function aprRemaining(row: ActivePackageRow): boolean {
 }
 
 /* ----------------------------------------------------------------------------------
+   Principal maturity helper (for "Unstake on:")
+---------------------------------------------------------------------------------- */
+function getUnstakeMaturityMs(row: ActivePackageRow): number | undefined {
+  if (!row.startDate) return undefined;
+  if (row.isFullyUnstaked) return undefined; // already done
+
+  const pkg = row.pkgRules;
+  if (!pkg) return undefined;
+
+  const startMs = row.startDate.getTime();
+
+  // Monthly unstake: first eligibility = start + claimableIntervalSec
+  if (pkg.monthlyUnstake && pkg.claimableIntervalSec > 0) {
+    return startMs + pkg.claimableIntervalSec * 1000;
+  }
+
+  // Locked principal or only duration given: maturity at end of duration
+  if (pkg.durationInDays > 0) {
+    return startMs + pkg.durationInDays * 86400 * 1000;
+  }
+
+  return undefined;
+}
+
+/* ----------------------------------------------------------------------------------
    Props
 ---------------------------------------------------------------------------------- */
 type Props = {
@@ -206,9 +231,7 @@ const FlipNumber: React.FC<{ value: string | number }> = ({ value }) => (
 
 // Friendlier empty state (with piggy bank + animated yy-coin)
 
-
 // Friendlier empty state with piggy bank + multiple tiny YY coins pouring in
-
 
 const EmptyState: React.FC<{ offline?: boolean; pending?: boolean }> = ({ offline, pending }) => {
   const onRetry = () => {
@@ -330,42 +353,33 @@ const EmptyState: React.FC<{ offline?: boolean; pending?: boolean }> = ({ offlin
   );
 };
 
-
-
-
-
 const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnstake }) => {
   const { address } = useAccount();
   const publicClient = usePublicClient({ chainId: bsc.id });
   const { data: walletClient } = useWalletClient();
 
   /* ----------------------------- Grace-delay loader ------------------------------ */
-  // Mirrors `loading` but holds the loader for a short grace period when loading flips to false.
   const [showLoading, setShowLoading] = useState<boolean>(loading);
   useEffect(() => {
     if (loading) {
       setShowLoading(true);
       return;
     }
-    const t = window.setTimeout(() => setShowLoading(false), 10200); // 👈 1.2s grace delay
+    const t = window.setTimeout(() => setShowLoading(false), 10200);
     return () => window.clearTimeout(t);
   }, [loading]);
 
   /* ----------------------------- Local optimistic rows ----------------------------- */
   const [optimisticRows, setOptimisticRows] = useState<ActivePackageRow[]>([]);
-  // When each optimistic row was created (for elapsed timer)
   const [startedAtByTx, setStartedAtByTx] = useState<Record<string, number>>({});
-  // 1s ticker so elapsed timer & accrual counters update
   const [, setNowTick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setNowTick((t) => t + 1), 1000);
     return () => window.clearInterval(id);
   }, []);
 
-  // “since last window” manual anchors (reset on successful Claim)
   const [accrualAnchorByRow, setAccrualAnchorByRow] = useState<Record<string, number | undefined>>({});
 
-  // Helper: merge optimistic with real props (dedupe by txHash or by packageId+startTs)
   const mergedRows = useMemo(() => {
     if (!optimisticRows.length) return rows;
     const out: ActivePackageRow[] = [];
@@ -390,10 +404,8 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     return out;
   }, [rows, optimisticRows]);
 
-  // Convenience alias used by both desktop & mobile renderers
   const tableRows = mergedRows;
 
-  // Listen for optimistic events published elsewhere
   useEffect(() => {
     function addFromPayload(e: Event) {
       const detail = (e as CustomEvent).detail || {};
@@ -404,7 +416,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
       const startTs = Number(detail.startTs ?? Math.floor(Date.now() / 1000));
       const amountLabel: string = detail.totalAmountLabel ?? "—";
 
-      // Enriched optimistic fields
       const aprPct: number | undefined =
         typeof detail.aprPct === "number" ? detail.aprPct : undefined;
       const pkgRules: ActivePackageRow["pkgRules"] | undefined = detail.pkgRules;
@@ -451,19 +462,16 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     const names = ["active-packages:add-optimistic", "stake:optimistic"];
     names.forEach((n) => window.addEventListener(n, addFromPayload as EventListener));
 
-    // prune when props update
     function prune() {
       setOptimisticRows((prev) => {
         if (!prev.length) return prev;
 
-        // exact matches (old behavior)
         const propKeys = new Set(
           rows.map((r) =>
             r.txHash ? `tx:${r.txHash}` : `pkg:${r.packageId}:start:${r.startDate?.getTime?.() ?? 0}`
           )
         );
 
-        // fuzzy map (same package, start within ±2h)
         const propSimple = rows.map((r) => ({
           pid: r.packageId,
           t: r.startDate?.getTime?.() ?? 0,
@@ -495,7 +503,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     };
   }, [rows]);
 
-  // Promote optimistic row from Pending → Active on stake:confirmed
   useEffect(() => {
     function onStakedConfirmed(e: Event) {
       const { txHash } = (e as CustomEvent).detail || {};
@@ -508,7 +515,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     return () => window.removeEventListener("stake:confirmed", onStakedConfirmed as EventListener);
   }, []);
 
-  // Auto-promote Pending → Active after 120s if RPC view hasn't reflected yet
   useEffect(() => {
     const id = window.setInterval(() => {
       setOptimisticRows((prev) =>
@@ -553,7 +559,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
   async function claim(stakeIndex: string, pkg?: ActivePackageRow["pkgRules"]) {
     if (busyByRow[stakeIndex]) return;
 
-    // Early guards
     if (anyPending) {
       setErr(
         stakeIndex,
@@ -589,14 +594,12 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
 
       const hash = await walletClient.writeContract(sim.request);
 
-      // Show global spinner → auto-confetti → auto-refresh events
       openTxOverlay(hash as any, "Claiming rewards…", {
         doneEvent: "apr:claimed",
         successText: "Claim confirmed!",
         celebrateMs: 1800,
       });
 
-      // Locally set next-claim estimate and reset the accrual counter
       if (pkg?.monthlyAPRClaimable && pkg?.claimableIntervalSec) {
         const next = Math.floor(Date.now() / 1000) + Number(pkg.claimableIntervalSec);
         setOptNextByRow((m) => ({ ...m, [stakeIndex]: next }));
@@ -617,7 +620,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
   async function unstake(stakeIndex: string) {
     if (busyByRow[stakeIndex]) return;
 
-    // Early guards
     if (anyPending) {
       setErr(
         stakeIndex,
@@ -653,7 +655,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
 
       const hash = await walletClient.writeContract(sim.request);
 
-      // Show global spinner → auto-confetti → auto-refresh events
       openTxOverlay(hash as any, "Unstaking…", {
         doneEvent: "unstaked",
         successText: "Unstake confirmed!",
@@ -678,12 +679,11 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     { key: "amount", header: "AMOUNT" },
     { key: "apr", header: "APR" },
     { key: "start", header: "START DATE" },
-    { key: "next", header: "NEXT CLAIM" },
+    { key: "next", header: "NEXT / UNSTAKE" },
     { key: "status", header: "STATUS" },
     { key: "actions", header: "ACTIONS" },
   ] as const;
 
-  // Use showLoading (grace-delayed) instead of raw `loading`
   if (showLoading && tableRows.length === 0) return <LoadingActiveStakes />;
 
   if (error) {
@@ -699,8 +699,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     return <EmptyState pending={hasPending} offline={!online} />;
   }
 
-
-  // tiny UI atoms for mobile
   const PulseDot: React.FC<{ color?: string }> = ({ color = "bg-emerald-400" }) => (
     <span className="relative inline-block h-2.5 w-2.5">
       <span className={`absolute inset-0 rounded-full ${color}`} />
@@ -726,13 +724,12 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
     );
   };
 
-  // Earning sub-block used in both desktop + mobile amount cells
   const EarningBlock: React.FC<{ row: ActivePackageRow }> = ({ row }) => {
     const perSec = ratePerSecondYY(row);
     const perDay = perSec * 86400;
-    // choose anchor: manual reset (after claim) > optimistic override > default
+
     const manual = accrualAnchorByRow[row.stakeIndex];
-    const optNext = optNextByRow[row.stakeIndex]; // in seconds
+    const optNext = optNextByRow[row.stakeIndex];
     const defaultAnchor = defaultAccrualAnchorMs(row);
     const anchorMs =
       manual ??
@@ -788,14 +785,15 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                 const isOpt = !!r.optimistic;
                 const nowMs = Date.now();
 
-                // Optimistic rows should always look locked
-                const optNext = optNextByRow[r.stakeIndex]; // unix seconds (from optimistic post-claim)
+                const optNext = optNextByRow[r.stakeIndex];
                 const effectiveNextMs =
                   optNext != null ? optNext * 1000 : r.nextClaimWindow?.getTime?.();
 
-                // Completion
                 const completed = isCompleted(r);
-                const { capWei, claimed, remaining, pct } = capSummary(r);
+
+                const unstakeMaturityMs = getUnstakeMaturityMs(r);
+                const unstakeEligible =
+                  !r.isFullyUnstaked && typeof unstakeMaturityMs === "number" && unstakeMaturityMs <= nowMs;
 
                 const availableBase = !completed && (isOpt
                   ? false
@@ -825,6 +823,7 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                       (r.startDate?.getTime?.() ?? 0) + (pkg?.durationInDays ?? 0) * 86400 * 1000 <= nowMs);
 
                 const aprPct = deriveAprPct(r);
+                const { capWei, claimed, pct } = capSummary(r);
 
                 return (
                   <tr key={r.id} className={`transition-colors ${r.optimistic ? "bg-white/5" : "hover:bg-white/[0.03]"}`}>
@@ -835,7 +834,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
 
                     <td className="px-5 py-4 tabular-nums">
                       <div className="font-medium">{r.amount}</div>
-                      {/* live accrual snippet (hide when completed) */}
                       {!completed && <EarningBlock row={r} />}
                     </td>
 
@@ -850,12 +848,36 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                     <td className="px-5 py-4">
                       {isOpt ? (
                         renderPendingInfo(r)
-                      ) : completed ? (
-                        <div className="text-white/60">—</div>
                       ) : (
-                        <div className="flex items-center gap-2 text-white/60">
-                          <span>●</span>
-                          <span>{fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}</span>
+                        <div className="space-y-1 text-white/70">
+                          {completed ? (
+                            <div className="text-white/60">—</div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span>●</span>
+                              <span>
+                                Next claim: {fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Unstake on row */}
+                          <div className="flex items-center gap-2">
+                            <span>🔓</span>
+                            {r.isFullyUnstaked ? (
+                              <span className="text-emerald-300">Unstaked</span>
+                            ) : typeof unstakeMaturityMs === "number" ? (
+                              unstakeEligible ? (
+                                <span className="text-emerald-300">Unstakeable now</span>
+                              ) : (
+                                <span>
+                                  Unstake on: {fmtDateTime(new Date(unstakeMaturityMs))}
+                                </span>
+                              )
+                            ) : (
+                              <span className="text-white/50">Unstake on: —</span>
+                            )}
+                          </div>
                         </div>
                       )}
                     </td>
@@ -864,7 +886,7 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                       <span
                         className={
                           "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs ring-1 " +
-                          (isOpt || r.status === "Pending"
+                          (r.optimistic || r.status === "Pending"
                             ? "bg-white/10 text-white/70 ring-white/20"
                             : "bg-emerald-500/10 text-emerald-300 ring-emerald-400/20")
                         }
@@ -872,10 +894,10 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                         <span
                           className={
                             "h-1.5 w-1.5 rounded-full " +
-                            (isOpt || r.status === "Pending" ? "bg-white/50" : "bg-emerald-400")
+                            (r.optimistic || r.status === "Pending" ? "bg-white/50" : "bg-emerald-400")
                           }
                         />
-                        {completed ? "completed" : r.status === "Active" ? "staked" : (isOpt ? "pending" : r.status.toLowerCase())}
+                        {completed ? "completed" : r.status === "Active" ? "staked" : (r.optimistic ? "pending" : r.status.toLowerCase())}
                       </span>
                     </td>
 
@@ -906,7 +928,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                           Unstake
                         </button>
                       </div>
-                      {/* row error */}
                       {errByRow[r.stakeIndex] && (
                         <div className="mt-2 text-xs text-rose-400">{errByRow[r.stakeIndex]}</div>
                       )}
@@ -919,21 +940,23 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
         </div>
       </div>
 
-      {/* Mobile cards — use tableRows (merged with optimistic) */}
+      {/* Mobile cards */}
       <div className="md:hidden -mx-4 px-4 mt-6 space-y-4">
         {tableRows.map((r) => {
           const pkg = r.pkgRules;
           const isOpt = !!r.optimistic;
           const nowMs = Date.now();
 
-          // Optimistic rows should always look locked
-          const optNext = optNextByRow[r.stakeIndex]; // unix seconds (from optimistic post-claim)
+          const optNext = optNextByRow[r.stakeIndex];
           const effectiveNextMs =
             optNext != null ? optNext * 1000 : r.nextClaimWindow?.getTime?.();
 
-          // Completion
           const completed = isCompleted(r);
-          const { capWei, claimed, remaining, pct } = capSummary(r);
+          const { capWei, claimed, pct } = capSummary(r);
+
+          const unstakeMaturityMs = getUnstakeMaturityMs(r);
+          const unstakeEligible =
+            !r.isFullyUnstaked && typeof unstakeMaturityMs === "number" && unstakeMaturityMs <= nowMs;
 
           const availableBase = !completed && (isOpt
             ? false
@@ -980,7 +1003,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                   : "bg-gradient-to-br from-white/[0.07] to-white/[0.02] border-white/10"
               }`}
             >
-              {/* top accent */}
               <div
                 className={`absolute inset-x-0 top-0 h-[3px] ${
                   r.status === "Pending"
@@ -1035,22 +1057,15 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                   </span>
                 </div>
 
-                {/* live accrual snippet (hide when completed) */}
                 {!completed && <EarningBlock row={r} />}
 
                 {r.status !== "Pending" ? (
-                  // If optimistic → always show Next claim (locked)
                   isOpt ? (
                     <div className="text-xs text-white/60 mt-1">
                       ⏳ Next claim: {fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}
                     </div>
                   ) : completed ? (
                     <div className="mt-2 text-[13px] text-emerald-300">All done 🎉</div>
-                  ) : availableBase ? (
-                    <div className="mt-2 text-[13px] text-emerald-300">
-                      Claimable now:{" "}
-                      <span className="font-semibold text-emerald-200">up to {fmtYY(remaining)}</span>
-                    </div>
                   ) : (
                     <div className="text-xs text-white/60 mt-1">
                       ⏳ Next claim: {fmtDateTime(effectiveNextMs ? new Date(effectiveNextMs) : undefined)}
@@ -1058,7 +1073,22 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                   )
                 ) : null}
 
-                {/* Progress: Claimed vs Cap (hide bar when optimistic & no totals) */}
+                {/* Unstake on (mobile) */}
+                <div className="text-xs text-white/70 mt-1 flex items-center gap-2">
+                  <span>🔓</span>
+                  {r.isFullyUnstaked ? (
+                    <span className="text-emerald-300">Unstaked</span>
+                  ) : typeof unstakeMaturityMs === "number" ? (
+                    unstakeEligible ? (
+                      <span className="text-emerald-300">Unstakeable now</span>
+                    ) : (
+                      <span>Unstake on: {fmtDateTime(new Date(unstakeMaturityMs))}</span>
+                    )
+                  ) : (
+                    <span className="text-white/50">Unstake on: —</span>
+                  )}
+                </div>
+
                 {!isOpt && (
                   <div className="mt-2">
                     <div className="flex justify-between text-[11px] text-white/55 mb-1">
@@ -1077,7 +1107,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
                 )}
               </div>
 
-              {/* Hide action buttons when completed */}
               {!completed && (
                 <div className="mt-4 flex gap-3">
                   <motion.button
@@ -1110,7 +1139,6 @@ const ActivePackages: React.FC<Props> = ({ rows, loading, error, onClaim, onUnst
 
               <AnimatePresence>{/* shimmer kept out for brevity */}</AnimatePresence>
 
-              {/* row error (mobile) */}
               {errByRow[r.stakeIndex] && (
                 <div className="mt-2 text-xs text-rose-400">{errByRow[r.stakeIndex]}</div>
               )}
