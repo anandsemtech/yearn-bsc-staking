@@ -34,7 +34,7 @@ const WelcomeScreen: React.FC = () => {
     { label: "Total Value Locked", value: "$1.1M+", icon: Lock, color: "purple" },
     { label: "Active Community", value: "3,247+", icon: Users, color: "blue" },
     { label: "Max APY", value: "161%", icon: TrendingUp, color: "green" },
-    { label: "Networks", value: "5+", icon: Globe, color: "orange" },
+    { label: "Networks (soon) ", value: "5+", icon: Globe, color: "orange" },
   ];
 
   const FloatingShape = ({
