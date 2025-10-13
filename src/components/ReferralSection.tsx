@@ -1065,7 +1065,7 @@ function Tabs(props: {
       {/* Stats tab */}
       {tab === "stats" && (
         <div className="grid grid-cols-2 gap-2">
-          <Tile icon={<Wallet className="w-4.5 h-4.5" />} label="Total Staked" value={tiles.staked} />
+          <Tile icon={<Wallet className="w-4.5 h-4.5" />} label="My Total Staked" value={tiles.staked} />
           <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral (Lifetime)" value={tiles.lifetimeReferral} />
           <Tile icon={<StarIcon className="w-4.5 h-4.5" />} label="Star Earnings" value={tiles.star} />
           <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden Earnings" value={tiles.golden} />

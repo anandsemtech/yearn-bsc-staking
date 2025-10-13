@@ -27,17 +27,11 @@ import { getReferrer } from "@/lib/referrer";
 
 import { openTxOverlay } from "@/lib/txOverlay";
 
-
-
-
-
 const WAIT_CONFIRMATIONS = 1;
 const MAX_UINT256 = 2n ** 256n - 1n;
 const ALLOWANCE_POLL_ATTEMPTS = 8;
 const ALLOWANCE_POLL_DELAY_MS = 450;
 const APPROVE_YY_MAX = false;
-
-
 
 interface StakingModalProps {
   package: {
@@ -145,7 +139,10 @@ function msgFromUnknown(e: unknown, fallback = "Something went wrong") {
   }
 }
 
-
+// Persisted consent (per wallet)
+const CONSENT_NAMESPACE = "yt:stake_consent:v1";
+const makeConsentKey = (addr?: string | null) =>
+  `${CONSENT_NAMESPACE}:${(addr || "anon").toLowerCase()}`;
 
 const StakingModal: React.FC<StakingModalProps> = ({
   package: pkg,
@@ -605,13 +602,10 @@ const StakingModal: React.FC<StakingModalProps> = ({
     return null;
   }
 
-  
   const [isApproving, setIsApproving] = useState(false);
   const [isStaking, setIsStaking] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const lastStakeKeyRef = useRef<string | null>(null);
-
-  
 
   async function sendStakeTx(finalRef: Address): Promise<Hex> {
     if (!walletClient || !address) throw new Error("Wallet not ready");
@@ -631,8 +625,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
        return await walletClient.writeContract(call);
      }
   }
-
-  
 
   async function handleApproveAndStake() {
     setActionMsg(null);
@@ -688,7 +680,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
       // Show global spinner & let it resolve to success/close + trigger refresh
       openTxOverlay(hash as Hex, "Waiting for confirmation…");
 
-
       const totalHuman =
         (humanPerToken[0] + humanPerToken[1] + humanPerToken[2])
           .toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -723,11 +714,40 @@ const StakingModal: React.FC<StakingModalProps> = ({
   }
 
   const projectedEarnings = amountNum * (pkg.apy / 100);
+
+  /* -------------------- Risk consent (UI gate only) -------------------- */
+  const [consented, setConsented] = useState(false);
+  const [showDisclosure, setShowDisclosure] = useState(false);
+
+  // Load persisted consent whenever address changes
+  useEffect(() => {
+    try {
+      const k = makeConsentKey(address);
+      setConsented(localStorage.getItem(k) === "1");
+    } catch {
+      // ignore storage errors
+    }
+  }, [address]);
+
+  // Helper to update state + persist
+  const setConsentedPersist = (v: boolean) => {
+    setConsented(v);
+    try {
+      const k = makeConsentKey(address);
+      if (v) localStorage.setItem(k, "1");
+      else localStorage.removeItem(k);
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   const mainDisabled =
    isApproving || isStaking || !address ||
     amountNum < min || (!isMultipleOk && mStep > 1) ||
     validCompositions.length === 0 || !!chainIssue ||
-    (yWei + sWei + pWei === 0n) || !hasSufficientBalances || (preferred && refValid === false);
+    (yWei + sWei + pWei === 0n) || !hasSufficientBalances ||
+    (preferred && refValid === false) ||
+    !consented; // gate by consent only
 
   const mainBtnText =
    isApproving ? "Approving…" :
@@ -1012,6 +1032,38 @@ const StakingModal: React.FC<StakingModalProps> = ({
                 <p className="text-xs text-gray-400">Based on {pkg.apy}% APY</p>
               </div>
 
+              {/* Risk consent */}
+              <div className="rounded-xl p-4 bg-white/5 border border-white/10">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-white/20 bg-gray-800"
+                    checked={consented}
+                    onChange={(e) => setConsentedPersist(e.target.checked)}
+                  />
+                  <div className="text-sm leading-5">
+                    I understand that $YEARN and other cryptoassets are volatile and may lose value. Staking is not risk-free, and past performance does not guarantee future results. I have reviewed the package terms and accept the risks.
+                  </div>
+                </label>
+
+                <button
+                  type="button"
+                  className="mt-2 text-xs text-gray-300 hover:text-gray-100 underline underline-offset-2"
+                  onClick={() => setShowDisclosure((v) => !v)}
+                >
+                  {showDisclosure ? "Hide risk disclosure" : "View risk disclosure"}
+                </button>
+
+                {showDisclosure && (
+                  <ul className="mt-2 text-xs text-gray-300 list-disc pl-5 space-y-1">
+                    <li>Crypto prices can fluctuate significantly; you could lose some or all of your staked amount.</li>
+                    <li>Rewards/APY are not guaranteed and may vary by package configuration.</li>
+                    <li>Network, smart contract, or third-party risks may impact access to funds or rewards.</li>
+                    <li>Ensure your wallet and approvals are correct before proceeding.</li>
+                  </ul>
+                )}
+              </div>
+
               {chainIssue && <div className="text-xs text-amber-400">{chainIssue}</div>}
               {actionMsg && <div className="text-sm text-rose-400">{actionMsg}</div>}
             </div>
@@ -1040,7 +1092,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
           </div>
         </div>
 
-        
       </div>
     ),
     portalEl

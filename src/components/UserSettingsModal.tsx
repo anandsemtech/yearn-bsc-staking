@@ -1,5 +1,5 @@
 import {
-  X, Mail, Phone, Save, CheckCircle2, AlertTriangle, Loader2, Copy,
+  X, Mail, Phone, Save, CheckCircle2, AlertTriangle, Loader2, Copy, Gift,
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppKitAccount } from "@reown/appkit/react";
@@ -98,7 +98,8 @@ const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ onClose }) => {
 
       setInitialEmail(data?.email ?? payload.email ?? "");
       setInitialPhone(data?.phone ?? payload.phone ?? "");
-      setSuccessMsg("Your settings were saved successfully.");
+      // Success message updated to reflect the reward eligibility
+      setSuccessMsg("Saved! You’re now eligible for up to 100 $YEARN rewards. 🎉");
     } catch (err: any) {
       const msg = err?.message || err?.error_description || "Failed to save settings. Please try again.";
       setErrorMsg(msg);
@@ -121,7 +122,20 @@ const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ onClose }) => {
         initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
         transition={{ type: "spring", stiffness: 360, damping: 30 }}
       >
-        <div className="mx-auto w-full md:max-w-lg rounded-t-3xl md:rounded-2xl border border-white/10 bg-[#151922]/95 text-white shadow-[0_-20px_60px_rgba(0,0,0,.45)] md:shadow-[0_20px_80px_-20px_rgba(0,0,0,.6)] overflow-hidden">
+        <div className="relative mx-auto w-full md:max-w-lg rounded-t-3xl md:rounded-2xl border border-white/10 bg-[#151922]/95 text-white shadow-[0_-20px_60px_rgba(0,0,0,.45)] md:shadow-[0_20px_80px_-20px_rgba(0,0,0,.6)] overflow-hidden">
+          {/* Sticker announcement */}
+          <div
+            className="hidden md:flex items-center gap-2 absolute top-3 right-3 rounded-full px-3 py-1.5
+                       bg-gradient-to-r from-amber-500/90 to-pink-500/90 text-white shadow-lg ring-1 ring-white/20"
+            aria-label="Optional bonus announcement"
+            title="Optional: Fill this form to be eligible for up to 100 $YEARN"
+          >
+            <Gift className="w-4 h-4" />
+            <span className="text-xs font-semibold tracking-wide">
+              Optional • Earn up to 100 $YEARN
+            </span>
+          </div>
+
           <div className="px-5 md:px-6 pt-3 md:pt-5 pb-3 border-b border-white/10 flex items-center gap-3">
             <div className="mx-auto md:mx-0 md:mr-2 h-1.5 w-12 md:hidden rounded-full bg-white/20" />
             <h2 className="text-base md:text-lg font-semibold">User Settings</h2>
@@ -130,7 +144,22 @@ const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ onClose }) => {
             </button>
           </div>
 
+          {/* Mobile sticker (under header for visibility) */}
+          <div className="md:hidden px-5 pt-3">
+            <div className="flex items-center gap-2 rounded-xl px-3 py-2 bg-gradient-to-r from-amber-500/90 to-pink-500/90 text-white ring-1 ring-white/20">
+              <Gift className="w-4 h-4" />
+              <span className="text-xs font-semibold">Optional • Earn up to 100 $YEARN</span>
+            </div>
+          </div>
+
           <div className="p-5 md:p-6 space-y-5">
+            {/* small explainer */}
+            <p className="text-xs text-white/60">
+              Filling this form is <span className="text-white/90 font-medium">optional</span>.
+              If you add your email (and optionally phone), you’ll be eligible for exclusive updates and
+              bonuses worth up to <span className="text-amber-300 font-semibold">100 $YEARN</span>.
+            </p>
+
             {successMsg && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-emerald-500/10 text-emerald-200 border border-emerald-400/30">
                 <CheckCircle2 className="w-5 h-5 mt-0.5" />
@@ -177,6 +206,8 @@ const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ onClose }) => {
                   onChange={(e) => setEmail(e.target.value)}
                   onBlur={() => setTouchedEmail(true)}
                   placeholder="name@domain.com"
+                  maxLength={254}
+                  autoComplete="email"
                   className={`w-full pl-12 pr-4 py-3 rounded-lg bg-white/[0.06] text-white placeholder:text-white/40 ring-1 focus:ring-2 transition
                   ${emailInvalid ? "ring-rose-400/60 focus:ring-rose-400/80" : "ring-white/10 focus:ring-indigo-400/60"}`}
                   aria-invalid={emailInvalid}
@@ -197,7 +228,10 @@ const UserSettingsModal: React.FC<UserSettingsModalProps> = ({ onClose }) => {
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+91 98765 43210"
+                  placeholder="+1 555-123-4567"
+                  maxLength={20}
+                  inputMode="tel"
+                  autoComplete="tel"
                   className="w-full pl-12 pr-4 py-3 rounded-lg bg-white/[0.06] text-white placeholder:text-white/40 ring-1 ring-white/10 focus:ring-2 focus:ring-indigo-400/60 transition"
                   disabled={!isConnected || loadingProfile}
                 />
