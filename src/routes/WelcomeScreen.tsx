@@ -24,17 +24,17 @@ const WelcomeScreen: React.FC = () => {
   }, []);
 
   const features = [
-    { icon: TrendingUp, title: "High Yield Staking", description: "Earn up to 25% APY with our premium DeFi packages", gradient: "from-emerald-400 to-cyan-400", particles: "emerald" },
-    { icon: Users, title: "15-Level Network", description: "Build exponential wealth through our multi-tier system", gradient: "from-purple-400 to-pink-400", particles: "purple" },
+    { icon: TrendingUp, title: "High Yield Staking", description: "Earn up to 160% APY with our premium DeFi packages", gradient: "from-emerald-400 to-cyan-400", particles: "emerald" },
+    { icon: Users, title: "Community Growth", description: "Build exponential wealth through our multi-tier system", gradient: "from-purple-400 to-pink-400", particles: "purple" },
     { icon: Shield, title: "Blockchain Security", description: "Smart contract audited and fully decentralized", gradient: "from-blue-400 to-indigo-400", particles: "blue" },
     { icon: Zap, title: "Instant Rewards", description: "Real-time earnings with automated distribution", gradient: "from-orange-400 to-red-400", particles: "orange" },
   ];
 
   const stats = [
-    { label: "Total Value Locked", value: "$2.5M+", icon: Lock, color: "purple" },
-    { label: "Active Stakers", value: "1,247+", icon: Users, color: "blue" },
-    { label: "Max APY", value: "25%", icon: TrendingUp, color: "green" },
-    { label: "Networks", value: "15+", icon: Globe, color: "orange" },
+    { label: "Total Value Locked", value: "$1.1M+", icon: Lock, color: "purple" },
+    { label: "Active Community", value: "3,247+", icon: Users, color: "blue" },
+    { label: "Max APY", value: "161%", icon: TrendingUp, color: "green" },
+    { label: "Networks", value: "5+", icon: Globe, color: "orange" },
   ];
 
   const FloatingShape = ({
@@ -141,7 +141,7 @@ const WelcomeScreen: React.FC = () => {
             </h1>
 
             <div className="relative mb-8">
-              <p className="text-xl md:text-2xl text-gray-300 mb-4 font-light">AI-Powered Decentralized Affiliate Marketing</p>
+              <p className="text-xl md:text-2xl text-gray-300 mb-4 font-light">Empowered by AI. United in YearnTogether.</p>
               <div className="flex items-center justify-center space-x-2 text-sm text-purple-400">
                 <Brain className="w-4 h-4 animate-pulse" />
                 <span className="animate-pulse">Powered by Smart Contracts & AI</span>
@@ -215,7 +215,7 @@ const WelcomeScreen: React.FC = () => {
                   <appkit-button label="Get Started Now"></appkit-button>
                   <div className="text-sm text-gray-400 animate-pulse flex items-center space-x-2">
                     <Cpu className="w-4 h-4" />
-                    <span>AI-Enhanced • No fees • Instant setup • Secure</span>
+                    <span>AI-Enhanced • Instant setup • Secure</span>
                   </div>
                 </div>
               </div>
