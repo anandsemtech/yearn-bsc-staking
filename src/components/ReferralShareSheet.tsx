@@ -55,12 +55,20 @@ export default function ReferralShareSheet({
   const [query, setQuery] = useState("");
   const [onlyNonEmpty, setOnlyNonEmpty] = useState(true);
 
-  const levelMap = useMemo(() => {
-    const m = new Map<number, { totalYY: bigint; rows: { addr: string; stakes: number; totalYY: bigint }[] }>();
-    (levels ?? []).forEach((L) => m.set(L.level, { totalYY: L.totalYY, rows: L.rows }));
+  // ---- FIX: type the memo + cast the input array shape to avoid 'never' inference
+  type RowUI = { addr: string; totalYY: bigint; stakes?: number };
+  const levelMap = useMemo<Map<number, { totalYY: bigint; rows: RowUI[] }>>(() => {
+    const m = new Map<number, { totalYY: bigint; rows: RowUI[] }>();
+    const arr = (levels ?? []) as Array<{
+      level: number;
+      totalYY: bigint;
+      rows: Array<{ addr: string; totalYY: bigint; stakes?: number }>;
+    }>;
+    arr.forEach((L) => m.set(L.level, { totalYY: L.totalYY, rows: L.rows ?? [] }));
     if (!m.size) m.set(1, { totalYY: 0n, rows: [] });
     return m;
   }, [levels]);
+  // ---- /FIX
 
   const ids = Array.from({ length: MAX_LEVEL }, (_, i) => i + 1);
   const filtered = onlyNonEmpty ? ids.filter((i) => (levelMap.get(i)?.rows?.length ?? 0) > 0) : ids;
@@ -203,7 +211,7 @@ export default function ReferralShareSheet({
             {!loading && visible.map((r, i) => (
               <div key={`${r.addr}-${i}`} className="grid grid-cols-12 px-3 py-2 text-xs">
                 <div className="col-span-7 font-mono text-gray-200 truncate">{r.addr}</div>
-                <div className="col-span-2 text-right text-gray-200">{r.stakes}</div>
+                <div className="col-span-2 text-right text-gray-200">{r.stakes ?? 0}</div>
                 <div className="col-span-3 text-right text-indigo-200">{fmt(r.totalYY, decimals?.yy)}</div>
               </div>
             ))}
@@ -220,7 +228,7 @@ export default function ReferralShareSheet({
               <div key={`${r.addr}-${i}`} className="rounded-lg bg-white/5 p-3">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-xs text-gray-200 truncate">{r.addr}</span>
-                  <span className="text-[11px] text-gray-400">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                  <span className="text-[11px] text-gray-400">{(r.stakes ?? 0)} stake{(r.stakes ?? 0) === 1 ? "" : "s"}</span>
                 </div>
                 <div className="mt-2 text-[11px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
               </div>

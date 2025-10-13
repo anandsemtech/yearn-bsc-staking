@@ -1,17 +1,16 @@
 // src/components/ReferralSection.tsx
 // Mobile: AppKit-style bottom sheets (Levels / My Claims)
-// Desktop: inline explorer (always open). Uses lib/subgraph via useReferralProfile.
+// Desktop: inline explorer (always open). Uses subgraph + RPC.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAccount } from "wagmi";
 import {
-  Gift, RefreshCw, Wallet, Award, Star, Crown, Copy, Check,
+  Gift, RefreshCw, Wallet, Award, Star as StarIcon, Crown, Copy, Check,
   Users, Search, Filter, Link as LinkIcon, X, PieChart
 } from "lucide-react";
 import { useReferralProfile, fmt } from "@/hooks/useReferralProfile";
-import { useEarningsRPC } from "@/hooks/useEarningsRPC"; // ← NEW
-
+import { useEarningsRPC } from "@/hooks/useEarningsRPC";
 import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
 
 /* ============================================================
@@ -19,6 +18,19 @@ import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent"
 ============================================================ */
 const MAX_LEVEL = 15;
 const PAGE_SIZE = 12;
+// Vite env var (IMPORTANT)
+const SUBGRAPH_URL = import.meta.env.VITE_SUBGRAPH_YEARN as string;
+
+/* ============================================================
+   Types for subgraph-based levels
+============================================================ */
+type Row = { addr: string; totalYY: bigint };
+type LevelBucket = { level: number; rows: Row[]; totalYY: bigint };
+
+type SGUserTotals = {
+  starEarningsTotal: bigint;
+  goldenEarningsTotal: bigint;
+};
 
 /* ============================================================
    Small helpers
@@ -49,15 +61,114 @@ async function copy(text: string) {
   } catch { return false; }
 }
 
-/** Unique helper name to avoid collisions anywhere in the file */
 function computeFilteredIds(
-  levelMap: Map<number, { totalYY: bigint; rows: any[] }>,
+  levelMap: Map<number, { totalYY: bigint; rows: Row[] }>,
   onlyNonEmpty: boolean
 ) {
   const ids = Array.from({ length: MAX_LEVEL }, (_, i) => i + 1);
   return onlyNonEmpty
     ? ids.filter((i) => (levelMap.get(i)?.rows?.length ?? 0) > 0)
     : ids;
+}
+
+/* ============================================================
+   Subgraph hook: pull up to 15 levels + user earnings totals
+============================================================ */
+function useReferralLevelsFromSubgraph(
+  address?: `0x${string}`,
+  opts?: { maxLevels?: number; perLevel?: number }
+) {
+  const maxLevels = opts?.maxLevels ?? MAX_LEVEL;
+  const perLevel = opts?.perLevel ?? 1000;
+
+  const [loading, setLoading] = useState(false);
+  const [levels, setLevels] = useState<LevelBucket[]>([]);
+  const [totals, setTotals] = useState<SGUserTotals>({ starEarningsTotal: 0n, goldenEarningsTotal: 0n });
+
+  useEffect(() => {
+    if (!address || !SUBGRAPH_URL) {
+      setLevels([]);
+      setTotals({ starEarningsTotal: 0n, goldenEarningsTotal: 0n });
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const me = address.toLowerCase();
+
+        const query = `
+          query RefLevels($me: ID!, $first: Int!) {
+            user(id: $me) {
+              id
+              starEarningsTotal
+              goldenEarningsTotal
+            }
+            referralPaths(
+              where: { ancestor: $me, depth_in: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15] }
+              first: $first
+            ) {
+              depth
+              descendant { id totalStaked }
+            }
+          }`;
+
+        const res = await fetch(SUBGRAPH_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables: { me, first: perLevel } }),
+        });
+        const json = await res.json();
+
+        const rows: Array<{ depth: number; descendant: { id: string; totalStaked: string } }> =
+          json?.data?.referralPaths ?? [];
+
+        const map = new Map<number, { rows: Row[]; totalYY: bigint }>();
+        for (let d = 1; d <= maxLevels; d++) map.set(d, { rows: [], totalYY: 0n });
+
+        for (const r of rows) {
+          const d = r.depth;
+          if (d < 1 || d > maxLevels) continue;
+          const addr = (r.descendant?.id ?? "").toLowerCase();
+          const total = BigInt(r.descendant?.totalStaked ?? "0");
+          const bucket = map.get(d)!;
+          bucket.rows.push({ addr, totalYY: total });
+          bucket.totalYY += total;
+        }
+
+        const out: LevelBucket[] = Array.from({ length: maxLevels }, (_, i) => {
+          const lvl = i + 1;
+          const b = map.get(lvl)!;
+          b.rows.sort((a, b) => (a.totalYY > b.totalYY ? -1 : a.totalYY < b.totalYY ? 1 : 0));
+          return { level: lvl, rows: b.rows, totalYY: b.totalYY };
+        });
+
+        const u = json?.data?.user ?? null;
+        const sgTotals: SGUserTotals = {
+          starEarningsTotal: BigInt(u?.starEarningsTotal ?? "0"),
+          goldenEarningsTotal: BigInt(u?.goldenEarningsTotal ?? "0"),
+        };
+
+        if (!cancelled) {
+          setLevels(out);
+          setTotals(sgTotals);
+        }
+      } catch (e) {
+        console.error("useReferralLevelsFromSubgraph error:", e);
+        if (!cancelled) {
+          setLevels([]);
+          setTotals({ starEarningsTotal: 0n, goldenEarningsTotal: 0n });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [address, perLevel, maxLevels]);
+
+  return { loading, levels, totals };
 }
 
 /* ============================================================
@@ -69,8 +180,8 @@ function SheetPortal({
   onClose,
   title,
   children,
-  maxVh = 90,            // cap at X% of viewport height
-  bottomGapPx = 28,      // extra breathing room at the bottom
+  maxVh = 90,
+  bottomGapPx = 28,
 }: {
   open: boolean;
   onClose: () => void;
@@ -94,7 +205,7 @@ function SheetPortal({
   useEffect(() => {
     if (!open || !bodyRef.current) return;
 
-    const headerPx = 64; // header height (grab bar + title)
+    const headerPx = 64; // header height
 
     const compute = () => {
       const node = bodyRef.current;
@@ -117,8 +228,7 @@ function SheetPortal({
       if (!roRef.current) {
         roRef.current = new RO(() => scheduleCompute());
       }
-      if (bodyRef.current) roRef.current?.observe(bodyRef.current); // <-- replace line 118 with this
-
+      if (bodyRef.current) roRef.current?.observe(bodyRef.current);
     }
 
     const onResize = () => scheduleCompute();
@@ -142,7 +252,6 @@ function SheetPortal({
   return createPortal(
     <>
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2100]" onClick={onClose} />
-
       <div
         className="fixed inset-x-0 bottom-0 z-[2101] rounded-t-[24px] shadow-[0_-20px_60px_-10px_rgba(0,0,0,0.55)]
                    border-t border-white/10
@@ -155,7 +264,7 @@ function SheetPortal({
         role="dialog"
         aria-modal="true"
       >
-        {/* Header: grabber + centered title + X */}
+        {/* Header */}
         <div className="px-5 pt-4 pb-3 border-b border-white/10">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div className="justify-self-center h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
@@ -248,7 +357,7 @@ function DesktopModal({
    Public component
 ============================================================ */
 type Props = {
-  hasPreferredBadge: boolean; // if false, render nothing
+  hasPreferredBadge: boolean;
   placeholders?: { referral?: string; star?: string; golden?: string };
   className?: string;
   onOpenClaims?: () => void;
@@ -260,25 +369,34 @@ const ReferralSection: React.FC<Props> = ({
   className,
   onOpenClaims,
 }) => {
-  // ✅ Always call hooks first to keep hook order stable across renders.
   const isMobile = useIsMobile(640);
   const { address } = useAccount();
 
-  // NEW: read lifetime referral via RPC
+  // Lifetime referral via RPC (Y token 18d)
   const { totals: rpcTotals, loading: rpcLoading } = useEarningsRPC(address || undefined);
-  const lifetimeReferralStr = rpcLoading
-    ? "…"
-    : fmt(rpcTotals?.lifeSum ?? 0n, 18); // lifeSum is bigint wei; tokens are 18d
+  const lifetimeReferralStr = rpcLoading ? "…" : fmt(rpcTotals?.lifeSum ?? 0n, 18);
 
-  // Light profile fetch for the card/preview
-  const { loading, decimals, myTotalYY, levels, invalidate } = useReferralProfile(
+  const {
+    loading: profileLoading,
+    decimals,
+    myTotalYY,
+    invalidate
+  } = useReferralProfile(
     (address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
-    { ttlMs: 120_000, perLevel: 120 }
+    { ttlMs: 120_000 }
   );
 
+  const { loading: levelsLoading, levels, totals } = useReferralLevelsFromSubgraph(
+    (address ?? "0x0000000000000000000000000000000000000000") as `0x${string}`,
+    { maxLevels: 15, perLevel: 1000 }
+  );
+
+  const loading = profileLoading || levelsLoading;
+
+  // map level -> rows/total
   const levelMap = useMemo(() => {
-    const m = new Map<number, { totalYY: bigint; rows: { addr: string; stakes: number; totalYY: bigint }[] }>();
-    (levels ?? []).forEach((L) => m.set(L.level, { totalYY: L.totalYY, rows: L.rows }));
+    const m = new Map<number, { totalYY: bigint; rows: Row[] }>();
+    for (const L of levels) m.set(L.level, { totalYY: L.totalYY, rows: L.rows });
     return m;
   }, [levels]);
 
@@ -288,8 +406,8 @@ const ReferralSection: React.FC<Props> = ({
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const link = origin && address ? `${origin}?ref=${address}` : "";
 
-  const [sheetOpen, setSheetOpen] = useState(false);    // Levels sheet (mobile-only)
-  const [claimsOpen, setClaimsOpen] = useState(false);  // My Claims (responsive)
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [claimsOpen, setClaimsOpen] = useState(false);
 
   // Footer → open-sheet event bridge
   useEffect(() => {
@@ -303,7 +421,7 @@ const ReferralSection: React.FC<Props> = ({
     };
   }, []);
 
-  // Shared explorer state (desktop inline + mobile sheet)
+  // Shared explorer state
   const [page, setPage] = useState(1);
   const [level, setLevel] = useState<number>(1);
   const [query, setQuery] = useState("");
@@ -322,7 +440,6 @@ const ReferralSection: React.FC<Props> = ({
   const visibleMain = rowsMain.slice(startMain, startMain + PAGE_SIZE);
   const totalYYMain = levelMap.get(effectiveMain)?.totalYY ?? 0n;
 
-  // ❗️Only decide what to render AFTER hooks have run.
   if (!hasPreferredBadge) return <></>;
 
   return (
@@ -348,7 +465,6 @@ const ReferralSection: React.FC<Props> = ({
 
           {/* Actions */}
           <div className="ml-auto flex items-center gap-2">
-            {/* Refresh */}
             <button
               onClick={() => invalidate()}
               aria-label="Refresh referrals"
@@ -359,7 +475,6 @@ const ReferralSection: React.FC<Props> = ({
               <span className="hidden sm:inline">Refresh</span>
             </button>
 
-            {/* My Claims */}
             <button
               onClick={() => {
                 setClaimsOpen(true);
@@ -373,12 +488,13 @@ const ReferralSection: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Tiles */}
+        {/* Tiles (Stats on the card) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mt-3">
           <Tile icon={<Wallet className="w-4.5 h-4.5" />} label="Total Staked" value={loading ? "…" : `${fmt(myTotalYY ?? 0n, decimals?.yy)} YY`} />
-          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral" value={placeholders.referral ?? "—"} />
-          <Tile icon={<Star className="w-4.5 h-4.5" />} label="Star" value={placeholders.star ?? "—"} />
-          <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden" value={placeholders.golden ?? "—"} />
+          {/* Referral = lifetime referrals (RPC) */}
+          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral" value={lifetimeReferralStr} />
+          <Tile icon={<StarIcon className="w-4.5 h-4.5" />} label="Star" value={loading ? "…" : fmt(totals.starEarningsTotal, 18)} />
+          <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden" value={loading ? "…" : fmt(totals.goldenEarningsTotal, 18)} />
         </div>
 
         {/* Level 1 + Share link */}
@@ -388,11 +504,10 @@ const ReferralSection: React.FC<Props> = ({
               <LinkIcon className="w-4.5 h-4.5 text-indigo-300" />
               Share Link
             </div>
-            <div className="flex items-center gap-2 rounded-xl bg-white/8 px-2.5 py-2 ring-1 ring-white/10">
+            <div className="flex items-center gap-2 rounded-2xl bg-white/8 px-2.5 py-2 ring-1 ring-white/10">
               <span className="text-[12px] text-gray-100/90 font-mono truncate flex-1" title={link || "—"}>
                 {link || "—"}
               </span>
-              {/* Icon-only copy with feedback */}
               <CopyIconButton text={link} />
             </div>
           </div>
@@ -402,10 +517,11 @@ const ReferralSection: React.FC<Props> = ({
             <div className="text-[13px] font-semibold text-white">Level 1</div>
             <div className="text-[12px] text-gray-300/90">{loading ? "…" : `${L1.rows.length} referees`}</div>
 
-            {/* right side: total + All Levels (only on mobile) */}
             <div className="ml-auto flex items-center gap-2 text-[12px] text-gray-300/90">
               <span>Total YY</span>
-              <span className="font-mono font-semibold text-emerald-300 text-[13px]">{loading ? "…" : fmt(L1.totalYY, decimals?.yy)}</span>
+              <span className="font-mono font-semibold text-emerald-300 text-[13px]">
+                {loading ? "…" : fmt(L1.totalYY, decimals?.yy)}
+              </span>
               {isMobile && (
                 <button
                   onClick={() => setSheetOpen(true)}
@@ -428,9 +544,13 @@ const ReferralSection: React.FC<Props> = ({
                   <div key={`${r.addr}-${i}`} className="rounded-2xl bg-white/8 p-3 ring-1 ring-white/10">
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-[12px] text-gray-100 truncate">{r.addr}</span>
-                      <span className="text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                      <div className="text-right">
+                        <div className="text-[11px] text-gray-300/80 leading-none">Total YY</div>
+                        <div className="font-mono text-[16px] font-bold text-emerald-300 leading-none">
+                          {fmt(r.totalYY, decimals?.yy)}
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-2 text-[12px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
                   </div>
                 ))}
               </div>
@@ -528,7 +648,6 @@ const ReferralSection: React.FC<Props> = ({
                             </div>
                           </div>
                         </div>
-                        <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
                       </div>
                     ))}
 
@@ -571,10 +690,10 @@ const ReferralSection: React.FC<Props> = ({
           link={link}
           tiles={{
             staked: loading ? "…" : `${fmt(myTotalYY ?? 0n, decimals?.yy)} YY`,
-            referral: placeholders.referral ?? "—",
-            star: placeholders.star ?? "—",
-            golden: placeholders.golden ?? "—",
-            lifetimeReferral: lifetimeReferralStr, // ← from RPC
+            referral: lifetimeReferralStr,
+            star: loading ? "…" : fmt(totals.starEarningsTotal, 18),
+            golden: loading ? "…" : fmt(totals.goldenEarningsTotal, 18),
+            lifetimeReferral: lifetimeReferralStr,
           }}
           levelMap={levelMap}
           decimals={decimals?.yy ?? 18}
@@ -608,18 +727,27 @@ const ReferralSection: React.FC<Props> = ({
   );
 };
 
-export default ReferralSection;
-
 /* ============================================================
-   Tiny pieces
+   Tiny helper component: Tile
 ============================================================ */
-function Tile({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Tile({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-2xl p-3 sm:p-3.5 bg-white/8 ring-1 ring-white/10">
       <div className="text-[12px] text-gray-300/90 flex items-center gap-1.5">
-        {icon}{label}
+        {icon}
+        {label}
       </div>
-      <div className="mt-1 text-[16px] sm:text-[18px] font-bold text-white">{value}</div>
+      <div className="mt-1 text-[16px] sm:text-[18px] font-bold text-white">
+        {value}
+      </div>
     </div>
   );
 }
@@ -741,7 +869,7 @@ function LevelRow({
 function Tabs(props: {
   link: string;
   tiles: { staked: string; referral: string; star: string; golden: string; lifetimeReferral: string };
-  levelMap: Map<number, { totalYY: bigint; rows: { addr: string; stakes: number; totalYY: bigint }[] }>;
+  levelMap: Map<number, { totalYY: bigint; rows: Row[] }>;
   decimals: number;
   page: number; setPage: (n: number) => void;
   level: number; setLevel: (n: number) => void;
@@ -816,7 +944,6 @@ function Tabs(props: {
                     </div>
                   </div>
                 </div>
-                <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
               </div>
             ))}
           </div>
@@ -908,7 +1035,6 @@ function Tabs(props: {
                       </div>
                     </div>
                   </div>
-                  <div className="mt-1 text-[12px] text-gray-300/90">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</div>
                 </div>
               ))}
 
@@ -940,11 +1066,9 @@ function Tabs(props: {
       {tab === "stats" && (
         <div className="grid grid-cols-2 gap-2">
           <Tile icon={<Wallet className="w-4.5 h-4.5" />} label="Total Staked" value={tiles.staked} />
-          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral" value={tiles.referral} />
-          <Tile icon={<Star className="w-4.5 h-4.5" />} label="Star" value={tiles.star} />
-          <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden" value={tiles.golden} />
-          {/* Lifetime from RPC */}
-          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Lifetime (Referral)" value={tiles.lifetimeReferral} />
+          <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral (Lifetime)" value={tiles.lifetimeReferral} />
+          <Tile icon={<StarIcon className="w-4.5 h-4.5" />} label="Star Earnings" value={tiles.star} />
+          <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden Earnings" value={tiles.golden} />
         </div>
       )}
     </div>
@@ -957,3 +1081,5 @@ function tabBtnCls(active: boolean) {
     active ? "bg-white/15 text-white" : "bg-white/8 text-gray-200 hover:bg-white/12",
   ].join(" ");
 }
+
+export default ReferralSection;

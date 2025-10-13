@@ -37,11 +37,20 @@ export default function ReferralSummaryCard({
     ttlMs: 120_000, perLevel: 120,
   });
 
-  const levelMap = useMemo(() => {
-    const m = new Map<number, { totalYY: bigint; rows: { addr: string; stakes: number; totalYY: bigint }[] }>();
-    (levels ?? []).forEach((L) => m.set(L.level, { totalYY: L.totalYY, rows: L.rows }));
+  // ---- FIX: type the memo + cast array to avoid 'never'
+  type RowUI = { addr: string; totalYY: bigint; stakes?: number };
+  const levelMap = useMemo<Map<number, { totalYY: bigint; rows: RowUI[] }>>(() => {
+    const m = new Map<number, { totalYY: bigint; rows: RowUI[] }>();
+    const arr = (levels ?? []) as Array<{
+      level: number;
+      totalYY: bigint;
+      rows: Array<{ addr: string; totalYY: bigint; stakes?: number }>;
+    }>;
+    arr.forEach((L) => m.set(L.level, { totalYY: L.totalYY, rows: L.rows ?? [] }));
+    if (!m.size) m.set(1, { totalYY: 0n, rows: [] });
     return m;
   }, [levels]);
+  // ---- /FIX
 
   const L1 = levelMap.get(1) ?? { totalYY: 0n, rows: [] };
   const preview = L1.rows.slice(0, maxPreview);
@@ -116,7 +125,7 @@ export default function ReferralSummaryCard({
         <div className="px-3 sm:px-4 py-3 bg-[#0b1022] border-b border-white/10 flex items-center gap-2">
           <Users className="w-4 h-4 text-blue-300" />
           <div className="text-sm font-semibold text-white">Level 1</div>
-          <div className="text-[11px] text-gray-400">{loading ? "…" : `${L1.rows.length} referees`}</div>
+          <div className="text:[11px] text-gray-400">{loading ? "…" : `${L1.rows.length} referees`}</div>
           <div className="ml-auto hidden sm:flex items-center gap-2 text-[11px] text-gray-400">
             <span>Total YY</span>
             <span className="font-mono font-semibold text-emerald-400 text-sm">{loading ? "…" : fmt(L1.totalYY, decimals?.yy)}</span>
@@ -132,7 +141,7 @@ export default function ReferralSummaryCard({
                 <div key={`${r.addr}-${i}`} className="rounded-lg bg-white/5 p-3">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-xs text-gray-200 truncate">{r.addr}</span>
-                    <span className="text-[11px] text-gray-400">{r.stakes} stake{r.stakes === 1 ? "" : "s"}</span>
+                    <span className="text-[11px] text-gray-400">{(r.stakes ?? 0)} stake{(r.stakes ?? 0) === 1 ? "" : "s"}</span>
                   </div>
                   <div className="mt-2 text-[11px] text-indigo-200">Total YY {fmt(r.totalYY, decimals?.yy)}</div>
                 </div>
@@ -149,7 +158,7 @@ export default function ReferralSummaryCard({
                 {preview.map((r, i) => (
                   <div key={`${r.addr}-${i}`} className="grid grid-cols-12 px-3 py-2 text-xs">
                     <div className="col-span-7 font-mono text-gray-200 truncate">{r.addr}</div>
-                    <div className="col-span-2 text-right text-gray-200">{r.stakes}</div>
+                    <div className="col-span-2 text-right text-gray-200">{r.stakes ?? 0}</div>
                     <div className="col-span-3 text-right text-indigo-200">{fmt(r.totalYY, decimals?.yy)}</div>
                   </div>
                 ))}
