@@ -67,8 +67,16 @@ const metadata = {
   name: "Yearn Staking — AppKit Starter",
   description: "Minimal connect → dashboard scaffold using Reown AppKit + Wagmi",
   url: siteOrigin,
-  icons: [`${siteOrigin}/assets/YearntogetherLight.svg`],
+  // Put a square PNG first; keep SVG as a fallback
+  icons: [
+    `${siteOrigin}/assets/yearntogether.png`,                 // 256×256 PNG (recommended)
+    `${siteOrigin}/assets/YearntogetherLight.svg` // optional SVG
+  ],
 };
+
+
+
+
 
 // ---------------------------
 // Wagmi + AppKit setup
@@ -99,7 +107,8 @@ const appKitTheme = {
 
 // Create the AppKit instance only once
 if (!globalThis.__APPKIT_CREATED__) {
-  createAppKit({
+  // Save the instance so you can debug it later
+  globalThis.appKit = createAppKit({
     adapters: [wagmiAdapter],
     networks,
     projectId,
@@ -115,6 +124,7 @@ if (!globalThis.__APPKIT_CREATED__) {
   });
   globalThis.__APPKIT_CREATED__ = true;
 }
+
 
 // ---------------------------
 // Provider wrapper
