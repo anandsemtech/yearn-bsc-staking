@@ -1,27 +1,69 @@
 <!doctype html>
 <html lang="en" class="dark">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>YearnTogether Staking</title>
+  <head>
+    <!-- Base -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>YearnTogether Staking</title>
+    <meta name="title" content="YearnTogether Staking | Stake & Earn with Referral Rewards" />
+    <meta name="description" content="Stake YEARN, wYEARN, and PrYEARN to earn APR with affiliate rewards and multi-tier star bonuses. Gas-optimized, Web3-native, on BNB Chain." />
+    <meta name="keywords" content="YearnTogether, Yearn Staking, YEARN, wYEARN, PrYEARN, staking, referral rewards, BNB Chain, Web3" />
+    <link rel="canonical" href="https://stake.yearntogether.com/" />
 
-  <!-- Top-level overlay root styles (bullet-proof z-index & stacking context) -->
-  <style>
-    #overlay-root {
-      position: fixed;
-      inset: 0;
-      z-index: 2147483647; /* sky-high */
-      pointer-events: none; /* confetti won’t block clicks */
-      isolation: isolate;   /* own stacking context above everything */
-    }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
+    <!-- Theme color for mobile UI chrome -->
+    <meta name="theme-color" content="#0b0f17" />
 
-  <!-- 👇 Add this right after #root so portals render truly above all app UI -->
-  <div id="overlay-root"></div>
+    <!-- Open Graph -->
+    <meta property="og:site_name" content="YearnTogether Staking" />
+    <meta property="og:url" content="https://stake.yearntogether.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="YearnTogether Staking | Stake & Earn with Referral Rewards" />
+    <meta property="og:description" content="Stake YEARN, wYEARN, and PrYEARN to earn APR with affiliate rewards and multi-tier star bonuses." />
+    <meta property="og:image" content="/assets/images/yearn-staking-og.png" />
+    <meta property="og:image:alt" content="YearnTogether Staking preview" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="en_US" />
 
-  <script type="module" src="/src/main.tsx"></script>
-</body>
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://stake.yearntogether.com/" />
+    <meta name="twitter:title" content="YearnTogether Staking | Stake & Earn with Referral Rewards" />
+    <meta name="twitter:description" content="Stake YEARN, wYEARN, and PrYEARN to earn APR with affiliate rewards and multi-tier star bonuses." />
+    <meta name="twitter:image" content="/assets/images/yearn-staking-og.png" />
+
+    <!-- Icons / PWA (served from /public) -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/icons/favicon-16x16.png" />
+    <link rel="icon" type="image/x-icon" href="/assets/icons/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Connection hints (keep if you use hosted fonts/CDNs) -->
+    <link rel="preconnect" href="https://fonts.reown.com" crossorigin />
+    <link rel="dns-prefetch" href="https://fonts.reown.com" />
+
+    <!-- Top-level overlay root styles (bullet-proof z-index & stacking context) -->
+    <style>
+      #overlay-root {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647; /* sky-high */
+        pointer-events: none; /* confetti won’t block clicks */
+        isolation: isolate;   /* own stacking context above everything */
+      }
+      /* Optional: set a solid background to match theme color for splash */
+      html, body { background: #0a0d14; }
+    </style>
+  </head>
+
+  <body class="bg-[#0a0d14]">
+    <div id="root"></div>
+
+    <!-- 👇 Keep this right after #root so portals render above all app UI -->
+    <div id="overlay-root"></div>
+
+    <!-- Entry -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
