@@ -71,13 +71,14 @@ const siteOrigin = runtimeOrigin ?? envSite ?? fallback;
 // ---------------------------
 const metadata = {
   name: "Yearn Staking — AppKit Starter",
+  description: "Minimal connect → dashboard scaffold using Reown AppKit + Wagmi",
   url: siteOrigin,
+  // Put a square PNG first; keep SVG as a fallback (some wallets ignore SVG).
   icons: [
-    `${siteOrigin}/assets/yearntogether.png`,
+    `${siteOrigin}/assets/yearntogether.png`, // 256×256 PNG recommended
     `${siteOrigin}/assets/YearntogetherLight.svg`,
   ],
 };
-
 
 // ---------------------------
 // Wagmi + AppKit setup
