@@ -5,7 +5,8 @@ import { PASS_POLICY } from "@/config/passPolicy";
 
 /** Helper: membership checks */
 const hasAll = (owned: number[] | undefined, need?: number[]) =>
-  !need || (owned ?? []).length > 0 && need.every((id) => (owned ?? []).includes(id));
+  !need || ((owned ?? []).length > 0 && need.every((id) => (owned ?? []).includes(id)));
+
 
 const hasAny = (owned: number[] | undefined, maybe?: number[]) =>
   !!maybe && maybe.length > 0 && (owned ?? []).some((id) => maybe.includes(id));
@@ -20,6 +21,8 @@ export type Context = {
   refereePassIds?: number[];
   /** Is the connected user acting as referee (staking user) or referrer (upline)? */
   role: "referee" | "referrer";
+  referrerIsVerified?: boolean; // NEW: allows StakingModal to pass this flag
+
 };
 
 export type ResolvedPolicy = {
@@ -27,6 +30,14 @@ export type ResolvedPolicy = {
   allowedCompositions: Trio[];
   showPages: Required<PageFlags>;
 };
+
+
+const defaultPageFlags: Required<PageFlags> = {
+  myClaims: false,
+  referrals: false,
+  starJourney: false,
+};
+
 
 /** Merge util to accumulate grants without duplicates */
 function mergeInto(target: ResolvedPolicy, add: Partial<ResolvedPolicy>) {
@@ -55,8 +66,11 @@ export function resolvePolicy(ctx: Context, policy: Rule[] = PASS_POLICY): Resol
   const out: ResolvedPolicy = {
     showReferralBox: false,
     allowedCompositions: [],
-    showPages: { myClaims: false, referrals: false, starJourney: false },
+    showPages: { ...defaultPageFlags },
   };
+
+  const refVerified = ctx.role !== "referee" || !!ctx.referrerIsVerified;
+
 
   for (const rule of policy) {
     // Rule activates if the OWNER (connected user) owns ANY of ownerPassIds
@@ -65,16 +79,23 @@ export function resolvePolicy(ctx: Context, policy: Rule[] = PASS_POLICY): Resol
 
     // Hard “requires” gates
     const req = rule.requires;
-    const hardOk =
-      hasAll(ctx.ownPassIds, req?.selfMustHave) &&
-      (ctx.role === "referee"
-        ? hasAll(ctx.referrerPassIds, req?.referrerMustHave)
-        : hasAll(ctx.refereePassIds, req?.refereeMustHave));
+    const hardOkSelf = hasAll(ctx.ownPassIds, req?.selfMustHave);
+    const needsRefHard = ctx.role === "referee" && !!req?.referrerMustHave && req.referrerMustHave.length > 0;
+
+    const hardOkCounter =
+      ctx.role === "referee"
+        ? (!needsRefHard || (refVerified && hasAll(ctx.referrerPassIds, req?.referrerMustHave)))
+        : hasAll(ctx.refereePassIds, req?.refereeMustHave);
+
+    const hardOk = hardOkSelf && hardOkCounter;
+
+
 
     // Soft “may-have” gates (additive; if specified and matched, we’ll allow even if hardOk=false)
     const softHit =
-      (ctx.role === "referee" && hasAny(ctx.referrerPassIds, req?.referrerMayHave)) ||
-      (ctx.role === "referrer" && hasAny(ctx.refereePassIds,  req?.refereeMayHave));
+  (ctx.role === "referee" && refVerified && hasAny(ctx.referrerPassIds, req?.referrerMayHave)) ||
+  (ctx.role === "referrer" && hasAny(ctx.refereePassIds,  req?.refereeMayHave));
+
 
     // Base owner-side grant (role filter + gating)
     const appliesRole = rule.appliesTo === "both" || rule.appliesTo === ctx.role;
@@ -82,7 +103,7 @@ export function resolvePolicy(ctx: Context, policy: Rule[] = PASS_POLICY): Resol
       mergeInto(out, {
         showReferralBox: !!rule.referralBox,
         allowedCompositions: rule.compositions || [],
-        showPages: rule.pages || {},
+        showPages: { ...defaultPageFlags, ...(rule.pages ?? {}) },
       });
     }
 
@@ -90,18 +111,26 @@ export function resolvePolicy(ctx: Context, policy: Rule[] = PASS_POLICY): Resol
     if (rule.propagate) {
       const ownerOk = hasAll(ctx.ownPassIds, rule.propagate.ownerMustHave ?? rule.ownerPassIds);
       const counterpartyIds = ctx.role === "referrer" ? ctx.refereePassIds : ctx.referrerPassIds;
-      const counterOk = hasAll(counterpartyIds, rule.propagate.counterpartyMustHave);
+      const needsRefPropHard =
+      ctx.role === "referee" && !!rule.propagate.counterpartyMustHave && rule.propagate.counterpartyMustHave.length > 0;
+
+    const counterOk =
+      ctx.role === "referee"
+        ? (!needsRefPropHard || (refVerified && hasAll(counterpartyIds, rule.propagate.counterpartyMustHave)))
+        : hasAll(counterpartyIds, rule.propagate.counterpartyMustHave);
+
 
       // Soft propagation gates
       const softCounterOk =
-        (ctx.role === "referee" && hasAny(ctx.referrerPassIds, rule.propagate.referrerMayHave)) ||
-        (ctx.role === "referrer" && hasAny(ctx.refereePassIds,  rule.propagate.refereeMayHave));
+  (ctx.role === "referee" && refVerified && hasAny(ctx.referrerPassIds, rule.propagate.referrerMayHave)) ||
+  (ctx.role === "referrer" && hasAny(ctx.refereePassIds,  rule.propagate.refereeMayHave));
+
 
       if ((ownerOk && counterOk) || softCounterOk) {
         mergeInto(out, {
           showReferralBox: !!rule.referralBox,
           allowedCompositions: rule.compositions || [],
-          showPages: rule.pages || {},
+          showPages: { ...defaultPageFlags, ...(rule.pages ?? {}) },
         });
       }
     }

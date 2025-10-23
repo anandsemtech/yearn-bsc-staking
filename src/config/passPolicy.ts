@@ -32,7 +32,8 @@ export type Rule = {
   /** UI affordances this rule grants */
   referralBox?: boolean;
   compositions?: Trio[];
-  pages?: PageFlags;
+  pages?: Partial<PageFlags>;
+
 
   /** Extra preconditions */
   requires?: Requires;

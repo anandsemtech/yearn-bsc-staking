@@ -57,21 +57,24 @@ export default function Dashboard() {
   }, [isConnected, address, navigate]);
 
   /** Always call hooks; pass nullable address safely */
-  const wallet = isConnected && address ? (address as Address) : (null as unknown as Address);
+  const wallet = isConnected && address ? (address as Address) : undefined;
+
 
   const { rows, loading, error, refresh } = useActiveStakes({
-    address: wallet as Address,          // hook should tolerate nullish
+    address: wallet, // let it be undefined when disconnected
     requireDirtyOrStale: true,
     softMaxAgeMs: 120_000,
     ttlMs: 60_000,
   });
+
 
   const { badges, show, dismiss, loading: badgesLoading } = useHonoraryNft(wallet);
 
   /** Preferred for now = any pass owned */
   const hasPreferred = useMemo(() => (badges || []).length > 0, [badges]);
 
-  const honoraryItems = badges;
+  const honoraryItems = badges ?? [];
+
 
   const [forceHonoraryOpen, setForceHonoraryOpen] = useState(false);
   useEffect(() => {
@@ -212,7 +215,14 @@ export default function Dashboard() {
           package={selectedPackage}
           onClose={() => setSelectedPackage(null)}
           hasAdvanced={!badgesLoading && hasPreferred}
-          honoraryItems={honoraryItems}
+          honoraryItems={honoraryItems
+            .filter((x) => !!x.address) // drop items missing address
+            .map(({ title, imageUrl, address }) => ({
+              title,
+              imageUrl: imageUrl ?? null,
+              address: address as `0x${string}`, // satisfy the prop's template literal type
+            }))}
+
         />
       )}
 
