@@ -4,22 +4,39 @@ import type { Address } from "viem";
 import { motion, AnimatePresence } from "framer-motion";
 import type { Transition } from "framer-motion";
 
-
-
-type Item = {
+/** ─────────────────────────────────────────────────────────────
+ * Item & Props
+ * - id: ERC-1155 token id
+ * - title: from metadata.name
+ * - imageUrl: from metadata.image (http/ipfs->http)
+ * - mediaUrl: from metadata.animation_url or image (prefer animation)
+ * - address: optional (used only for stable keys; same contract across items)
+ * - externalUrl: optional click-through to project page
+ * ───────────────────────────────────────────────────────────── */
+export type HonoraryItem = {
+  id: number;
   title: string;
-  imageUrl: string | null | undefined;
-  address: Address;
+  imageUrl?: string | null;
+  mediaUrl?: string | null;
+  address?: Address;
+  externalUrl?: string | null;
 };
 
 type Props = {
-  items: Item[];
+  items: HonoraryItem[];
   onClose: () => void;
-  onMinimizeToHeader?: (hero: { title: string; imageUrl: string | null | undefined; address: Address }) => void;
+  onMinimizeToHeader?: (hero: {
+    title: string;
+    imageUrl: string | null | undefined;
+    address?: Address;
+    id: number;
+  }) => void;
   placeholderSrc?: string;
 };
 
 const spring: Transition = { type: "spring", stiffness: 360, damping: 32, mass: 0.9 };
+
+const MARKETPLACE = (import.meta as any)?.env?.VITE_MARKETPLACE_ADDRESS as string | undefined;
 
 const HonoraryNftPopup: React.FC<Props> = ({
   items,
@@ -45,67 +62,70 @@ const HonoraryNftPopup: React.FC<Props> = ({
     return () => document.removeEventListener("keydown", onKey);
   }, [items.length]);
 
-  // Stable, non-empty keys for items
+  // Stable, non-empty keys for items (use address + id + slug)
   const keyedItems = useMemo(() => {
     return items.map((it, i) => {
       const addr = (it.address || "0x").toLowerCase();
       const base = addr && addr !== "0x" ? addr : `idx-${i}`;
+      const idPart = Number.isFinite(it.id) ? `id-${it.id}` : `i-${i}`;
       const titleSlug =
         (it.title || "").trim().toLowerCase().replace(/\s+/g, "-").slice(0, 24) || `title-${i}`;
-      return { ...it, _key: `${base}-${titleSlug}-${i}` };
+      return { ...it, _key: `${base}-${idPart}-${titleSlug}` };
     });
   }, [items]);
 
   const hero = keyedItems[heroIndex];
 
   const handleMinimize = () => {
-  const anchor = document.getElementById("honorary-chip-anchor");
-  const imgEl = heroImgRef.current;
+    const anchor = document.getElementById("honorary-chip-anchor");
+    const imgEl = heroImgRef.current;
 
-  // Prepare payload once
-  const payload = hero
-    ? {
-        title: hero.title,
-        imageUrl: hero.imageUrl || placeholderSrc,
-        address: hero.address as Address,
+    const src = (hero?.mediaUrl || hero?.imageUrl || placeholderSrc) as string;
+
+    // Prepare payload once
+    const payload = hero
+      ? {
+          id: hero.id,
+          title: hero.title,
+          imageUrl: hero.imageUrl || hero.mediaUrl || placeholderSrc,
+          address: hero.address as Address | undefined,
+        }
+      : null;
+
+    const sendMinimizeSignal = () => {
+      if (payload) {
+        // 1) Global event for header listeners
+        window.dispatchEvent(new CustomEvent("honorary:minimize", { detail: payload }));
+        // 2) Legacy/local callback (if provided)
+        onMinimizeToHeader?.(payload);
       }
-    : null;
+      // Focus the chip anchor if present (accessibility polish)
+      const anchorBtn = document.getElementById("honorary-chip-anchor") as HTMLButtonElement | null;
+      if (anchorBtn) {
+        setTimeout(() => anchorBtn.focus({ preventScroll: true }), 0);
+      }
+    };
 
-  const sendMinimizeSignal = () => {
-    if (payload) {
-      // 1) Global event for header listeners
-      window.dispatchEvent(
-        new CustomEvent("honorary:minimize", { detail: payload })
-      );
-      // 2) Legacy/local callback (if provided)
-      onMinimizeToHeader?.(payload);
+    if (anchor && imgEl) {
+      const from = imgEl.getBoundingClientRect();
+      const to = anchor.getBoundingClientRect();
+      const id = ++flySeq.current;
+
+      setFlying({ id, src, from, to });
+
+      // Allow the fly animation to play before we update header + close
+      setTimeout(() => {
+        sendMinimizeSignal();
+        onClose();
+      }, 480);
+      return;
     }
+
+    // No anchor or img—just notify and close immediately
+    sendMinimizeSignal();
+    onClose();
   };
 
-  if (anchor && imgEl) {
-    const from = imgEl.getBoundingClientRect();
-    const to = anchor.getBoundingClientRect();
-    const id = ++flySeq.current;
-
-    setFlying({
-      id,
-      src: (hero?.imageUrl || placeholderSrc) as string,
-      from,
-      to,
-    });
-
-    // Allow the fly animation to play before we update header + close
-    setTimeout(() => {
-      sendMinimizeSignal();
-      onClose();
-    }, 480);
-    return;
-  }
-
-  // No anchor or img—just notify and close immediately
-  sendMinimizeSignal();
-  onClose();
-};
   const swipeTo = (dir: 1 | -1) => {
     setHeroIndex((i) => {
       const n = keyedItems.length || 1;
@@ -206,12 +226,28 @@ const HonoraryNftPopup: React.FC<Props> = ({
                       whileHover={{ scale: 1.005 }}
                       whileTap={{ scale: 0.995 }}
                     >
-                      <img
-                        ref={heroImgRef}
-                        src={hero.imageUrl || placeholderSrc}
-                        alt={hero.title}
-                        className="w-full h-auto max-h-[58vh] object-contain bg-transparent"
-                      />
+                      {/* Optional external link wrap */}
+                      {hero.externalUrl ? (
+                        <a href={hero.externalUrl} target="_blank" rel="noreferrer">
+                          <img
+                            ref={heroImgRef}
+                            src={(hero.mediaUrl || hero.imageUrl || placeholderSrc) as string}
+                            alt={hero.title}
+                            decoding="async"
+                            loading="eager"
+                            className="w-full h-auto max-h-[58vh] object-contain bg-transparent"
+                          />
+                        </a>
+                      ) : (
+                        <img
+                          ref={heroImgRef}
+                          src={(hero.mediaUrl || hero.imageUrl || placeholderSrc) as string}
+                          alt={hero.title}
+                          decoding="async"
+                          loading="eager"
+                          className="w-full h-auto max-h-[58vh] object-contain bg-transparent"
+                        />
+                      )}
                     </motion.div>
 
                     <div className="absolute bottom-3 sm:bottom-4 left-0 right-0 flex items-center justify-between gap-2 px-3 sm:px-4">
@@ -241,9 +277,19 @@ const HonoraryNftPopup: React.FC<Props> = ({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="text-center text-white/70 text-sm"
+                    className="text-center text-white/80 text-sm"
                   >
-                    No badges yet.
+                    <div>No badges yet.</div>
+                    {MARKETPLACE && (
+                      <a
+                        href={`https://bscscan.com/address/${MARKETPLACE}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-block mt-2 text-sm text-amber-300 hover:text-amber-200 underline underline-offset-2"
+                      >
+                        Get a Yearn Pass →
+                      </a>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -251,10 +297,12 @@ const HonoraryNftPopup: React.FC<Props> = ({
 
             {/* Thumbnails */}
             <div className="md:border-l md:border-white/10 md:p-4">
+              {/* Mobile row */}
               <div className="md:hidden border-t border-white/10 px-3 py-3">
                 <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory [-webkit-overflow-scrolling:touch]">
                   {keyedItems.map((it, idx) => {
                     const active = idx === heroIndex;
+                    const thumbSrc = (it.mediaUrl || it.imageUrl || placeholderSrc) as string;
                     return (
                       <motion.button
                         key={`thumb-m-${it._key}`}
@@ -268,7 +316,7 @@ const HonoraryNftPopup: React.FC<Props> = ({
                         whileTap={{ scale: 0.98 }}
                       >
                         <img
-                          src={it.imageUrl || placeholderSrc}
+                          src={thumbSrc}
                           alt={it.title}
                           className="aspect-square object-cover"
                         />
@@ -281,10 +329,12 @@ const HonoraryNftPopup: React.FC<Props> = ({
                 </div>
               </div>
 
+              {/* Desktop grid */}
               <div className="hidden md:block p-4 overflow-y-auto max-h-[70vh]">
                 <div className="grid grid-cols-3 gap-3">
                   {keyedItems.map((it, idx) => {
                     const active = idx === heroIndex;
+                    const thumbSrc = (it.mediaUrl || it.imageUrl || placeholderSrc) as string;
                     return (
                       <motion.button
                         key={`thumb-${it._key}`}
@@ -298,7 +348,7 @@ const HonoraryNftPopup: React.FC<Props> = ({
                         whileTap={{ scale: 0.98 }}
                       >
                         <img
-                          src={it.imageUrl || placeholderSrc}
+                          src={thumbSrc}
                           alt={it.title}
                           className="aspect-square object-cover"
                         />

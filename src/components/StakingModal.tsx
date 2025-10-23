@@ -24,14 +24,21 @@ import { createPublicClient, http } from "viem";
 import { showEvmError, normalizeEvmError } from "@/lib/errors";
 
 import { getReferrer } from "@/lib/referrer";
-
 import { openTxOverlay } from "@/lib/txOverlay";
+
+/** 🔹 Pass-gating helpers */
+import { usePassIds } from "@/hooks/usePassIds";
+import usePolicy from "@/hooks/usePolicy";
+import { PASS_POLICY, type Trio } from "@/config/passPolicy";
 
 const WAIT_CONFIRMATIONS = 1;
 const MAX_UINT256 = 2n ** 256n - 1n;
 const ALLOWANCE_POLL_ATTEMPTS = 8;
 const ALLOWANCE_POLL_DELAY_MS = 450;
 const APPROVE_YY_MAX = false;
+
+
+
 
 interface StakingModalProps {
   package: {
@@ -64,6 +71,38 @@ const PY_DEC = Number(import.meta.env.VITE_PYEARN_DECIMALS ?? 18);
 const DEFAULT_REFERRER = (import.meta.env.VITE_DEFAULT_REFERRER ||
   "0xD2Dd094539cfF0F279078181E43A47fC9764aC0D") as Address;
 
+/** 🔹 Pass 1155 envs (safe fallbacks) */
+const PASS_1155 = (
+  import.meta.env.VITE_PASS_ADDRESS ||
+  import.meta.env.VITE_PASS1155_ADDRESS ||
+  ""
+) as Address;
+
+/** Build a tier list from PASS_POLICY (union of all numeric ids referenced there). */
+const PASS_TIER_IDS: number[] = Array.from(
+  new Set(
+    PASS_POLICY.flatMap((r) => [
+      ...(r.ownerPassIds || []),
+
+      // requires (hard + soft)
+      ...(r?.requires?.selfMustHave || []),
+      ...(r?.requires?.referrerMustHave || []),
+      ...(r?.requires?.refereeMustHave || []),
+      ...(r?.requires?.referrerMayHave || []),
+      ...(r?.requires?.refereeMayHave || []),
+
+      // propagate (hard + soft)
+      ...(r?.propagate?.ownerMustHave || []),
+      ...(r?.propagate?.counterpartyMustHave || []),
+      ...(r?.propagate?.referrerMayHave || []),
+      ...(r?.propagate?.refereeMayHave || []),
+    ])
+  )
+).filter(Number.isFinite);
+
+/** Optional: allow policy to extend *beyond* on-chain composition list */
+const allowExtras = import.meta.env.VITE_ALLOW_POLICY_COMPS_OUTSIDE_ONCHAIN === "1";
+
 const ERC20_ABI = [
   { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "approve",   stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
@@ -91,11 +130,9 @@ const STAKING_READS_ABI = [
   { type: "function", name: "isWhitelisted", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "userTotalStaked", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "referrerOf", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "address" }] },
-  // NEW: on-chain compositions (array of [uint8, uint8, uint8])
+  // On-chain valid compositions (array of [uint8, uint8, uint8])
   { type: "function", name: "getValidCompositions", stateMutability: "view", inputs: [], outputs: [{ type: "uint8[][]" }] },
 ] as const;
-
-const addCommas = (n: string) => n.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 const prettyFixed = (v: bigint, decimals: number, places = 2) => {
   const s = v.toString().padStart(decimals + 1, "0");
@@ -150,6 +187,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
   hasPreferredBadge,
   hasAdvanced,
 }) => {
+  // kept for compatibility, but no longer gates policy-based UI
   const preferred = Boolean(hasPreferredBadge ?? hasAdvanced ?? false);
 
   const { address, chainId: connectedChainId, isConnected } = useAccount();
@@ -270,17 +308,250 @@ const StakingModal: React.FC<StakingModalProps> = ({
     return () => { stop = true; };
   }, [publicClient]);
 
-  const validCompositions = useMemo<number[][]>(() => {
-    if (!preferred) return [[100, 0, 0]];
-    const rows = compRows.map((r) => [r.yYearnPct, r.sYearnPct, r.pYearnPct]);
-    return rows.length ? rows : [[100, 0, 0]];
-  }, [compRows, preferred]);
+  /** -------------------------------- NFT Policy Layer -------------------------------- */
+  const isAddr48 = (a?: string): a is Address => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
+
+  
+  /** Read ?ref=0x... from the URL (one-time) */
+  const qsRef = React.useMemo(() => {
+    try {
+      const v = new URLSearchParams(window.location.search).get("ref")?.trim();
+      return v && /^0x[a-fA-F0-9]{40}$/.test(v) ? (v as Address) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+
+
+  /** Referrer textbox state */
+  const [referrerInput, setReferrerInput] = useState<string>(DEFAULT_REFERRER);
+  const [refValid, setRefValid] = useState<boolean | null>(null);
+  const [refChecking, setRefChecking] = useState(false);
+  const [showFullRef, setShowFullRef] = useState(false);
+  const refInputEl = useRef<HTMLInputElement>(null);
+
+  const [existingReferrer, setExistingReferrer] = useState<Address | null>(null);
+  const [refLocked, setRefLocked] = useState(false);
+  const [refLoading, setRefLoading] = useState(false);
+
+  const { address: walletAddr } = useAccount();
+
+  /** Read existing referrer or ?ref/storage (no silent default) */
+  useEffect(() => {
+    (async () => {
+      const reset = () => {
+        setExistingReferrer(null);
+        setRefLocked(false);
+        setRefLoading(false);
+        setRefValid(null);
+      };
+
+      // If wallet not connected, still prefill with ?ref if present
+      if (!walletAddr) {
+        reset();
+        const stored = getReferrer();
+        const candidate = qsRef || (stored && isAddr48(stored) ? (stored as Address) : null);
+        setReferrerInput(candidate ?? "");  // no DEFAULT here
+        return;
+      }
+
+      setRefLoading(true);
+      try {
+        const r = await publicClient.readContract({
+          address: stakingContract,
+          abi: STAKING_READS_ABI,
+          functionName: "referrerOf",
+          args: [walletAddr],
+        }) as Address;
+
+        const isZero = /^0x0{40}$/i.test(r);
+        if (!isZero && !eqAddr(r, walletAddr)) {
+          // locked on-chain
+          setExistingReferrer(r);
+          setRefLocked(true);
+          setReferrerInput(r);
+          setRefValid(true);
+        } else {
+          // editable: prefer ?ref, else stored
+          const stored = getReferrer();
+          const candidate =
+            (qsRef && !eqAddr(qsRef, walletAddr)) ? qsRef :
+            (stored && isAddr48(stored) && !eqAddr(stored, walletAddr)) ? (stored as Address) :
+            null;
+
+          setExistingReferrer(null);
+          setRefLocked(false);
+          setReferrerInput(candidate ?? "");
+          setRefValid(null); // validator effect will run
+        }
+      } catch {
+        const stored = getReferrer();
+        const candidate =
+          (qsRef && !eqAddr(qsRef, walletAddr)) ? qsRef :
+          (stored && isAddr48(stored) && !eqAddr(stored, walletAddr)) ? (stored as Address) :
+          null;
+
+        setExistingReferrer(null);
+        setRefLocked(false);
+        setReferrerInput(candidate ?? "");
+        setRefValid(null);
+      } finally {
+        setRefLoading(false);
+      }
+    })();
+  }, [walletAddr, publicClient, qsRef]);
+
+
+
+
+  async function isReferrerEligible(addr: Address): Promise<boolean> {
+    try {
+      const [wl, staked] = await Promise.all([
+        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "isWhitelisted", args: [addr] }) as Promise<boolean>,
+        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "userTotalStaked", args: [addr] }) as Promise<bigint>,
+      ]);
+      return wl || staked > 0n;
+    } catch {
+      return true;
+    }
+  }
+
+  /** NFT reads (safe if PASS_1155 missing) */
+  const ownPassIds = useMemo(
+    () => (walletAddr && PASS_1155 && PASS_TIER_IDS.length > 0) ? (walletAddr as Address) : null,
+    [walletAddr]
+  );
+  /** Only provide a referrer address for NFT policy once it's locked or validated */
+  /** Only provide a referrer address for NFT policy once it's locked or validated */
+  const refPassOwner = useMemo(() => {
+    if (existingReferrer && !eqAddr(existingReferrer, walletAddr)) {
+      return (PASS_1155 && PASS_TIER_IDS.length > 0) ? (existingReferrer as Address) : null;
+    }
+    const val = (referrerInput || "").trim();
+    if (!refLocked && isAddr48(val) && !(walletAddr && eqAddr(val, walletAddr)) && refValid === true) {
+      return (PASS_1155 && PASS_TIER_IDS.length > 0) ? (val as Address) : null;
+    }
+    return null;
+  }, [existingReferrer, walletAddr, refLocked, referrerInput, refValid, PASS_1155, PASS_TIER_IDS]);
+
+
+
+
+
+  const { owned: myPassIds } = usePassIds(ownPassIds as Address | null, PASS_1155, PASS_TIER_IDS);
+  const { owned: refPassIds } = usePassIds(refPassOwner as Address | null, PASS_1155, PASS_TIER_IDS);
+
+  /** Does the (locked or validated) referrer own the additive passes? */
+  const refHasAdditive = useMemo(
+    () => Array.isArray(refPassIds) && refPassIds.some((id) => id === 3 || id === 4),
+    [refPassIds]
+  );
+
+
+  /** Resolve policy from perspective of referee (staking user) */
+  const referrerIsVerified = Boolean(refLocked || refValid === true);
+  const policy = usePolicy({
+    ownPassIds: myPassIds || [],
+    referrerPassIds: refPassIds || [],
+    role: "referee",
+    referrerIsVerified, // if supported, lets the hook ignore referrer rules until verified
+  });
+
+
+  /** 👇 NEW: decide referral box visibility (show if policy says so OR ref is locked on-chain) */
+  const showReferralUI = useMemo(
+    () => Boolean(qsRef || policy?.showReferralBox || existingReferrer),
+    [qsRef, policy?.showReferralBox, existingReferrer]
+  );
+
+
+
+  /** Validate referrer input based on the final visibility decision */
+  useEffect(() => {
+    if (!showReferralUI) {
+      // referral UI hidden ⇒ don't inject DEFAULT here; keep policy neutral
+      setRefValid(true);
+      setRefChecking(false);
+      return;
+    }
+    if (refLocked) {
+      setRefChecking(false);
+      setRefValid(true);
+      return;
+    }
+    const val = (referrerInput || "").trim();
+    if (!val) { setRefValid(null); setRefChecking(false); return; }     // empty input: neutral (no policy unlock)
+    if (!isAddr48(val)) { setRefValid(false); setRefChecking(false); return; }
+    if (walletAddr && isAddr48(val) && eqAddr(val, walletAddr)) {
+      setRefValid(false); setRefChecking(false); return;
+    }
+    setRefChecking(true);
+    const t = setTimeout(async () => {
+      try { setRefValid(await isReferrerEligible(val as Address)); }
+      finally { setRefChecking(false); }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [showReferralUI, referrerInput, refLocked, walletAddr]);
+
+
+  function finalReferrer(): Address {
+  if (existingReferrer && !eqAddr(existingReferrer, walletAddr)) return existingReferrer;
+  const v = (referrerInput || "").trim();
+  if (isAddr48(v) && !(walletAddr && eqAddr(v, walletAddr)) && refValid === true) {
+    return v as Address;
+  }
+  return DEFAULT_REFERRER; // fallback just for tx safety
+}
+
+
+
+  /** Compute allowed comps by policy, then intersect with on-chain valid rows */
+  /** Compute allowed comps from policy; apply hard guard for additive rule */
+  const allowedByPolicy: Trio[] = useMemo(() => {
+    const base = policy?.allowedCompositions || [];
+
+    // If policy is empty, keep the safe default.
+    if (base.length === 0) return [[100, 0, 0]];
+
+    // Prevent accidental unlock of [80,20,0] unless referrer actually has pass 3 or 4.
+    const filtered = base.filter((c) => {
+      const isAdditive = c[0] === 80 && c[1] === 20 && c[2] === 0;
+      return isAdditive ? refHasAdditive : true;
+    });
+
+    // Always have at least the base [100,0,0] path.
+    return filtered.length > 0 ? filtered : [[100, 0, 0]];
+  }, [policy?.allowedCompositions, refHasAdditive]);
+
+
+  const onchainComps: Trio[] = useMemo(
+    () => compRows.map((r) => [r.yYearnPct, r.sYearnPct, r.pYearnPct]) as Trio[],
+    [compRows]
+  );
+
+  const compKey = (t: Trio) => `${t[0]}-${t[1]}-${t[2]}`;
+
+  const validCompositions = useMemo<Trio[]>(() => {
+    if (onchainComps.length > 0) {
+      const allow = new Set(allowedByPolicy.map(compKey));
+      const filtered = onchainComps.filter((t) => allow.has(compKey(t)));
+      if (!allowExtras) return filtered.length > 0 ? filtered : [[100, 0, 0]];
+      const extras = allowedByPolicy.filter((t) => !filtered.some((f) => compKey(f) === compKey(t)));
+      const merged = [...filtered, ...extras];
+      return merged.length > 0 ? merged : [[100, 0, 0]];
+    }
+    return allowedByPolicy.length > 0 ? allowedByPolicy : [[100, 0, 0]];
+  }, [onchainComps, allowedByPolicy]);
 
   const [selectedIdx, setSelectedIdx] = useState(0);
   useEffect(() => {
     if (selectedIdx >= validCompositions.length) setSelectedIdx(0);
   }, [validCompositions.length, selectedIdx]);
   const selected = validCompositions[selectedIdx] ?? [100, 0, 0];
+
+  const only100 = (arr: Trio[]) => arr.length === 1 && compKey(arr[0]) === "100-0-0";
+  const showCompUI = validCompositions.length > 0 && !only100(validCompositions);
 
   /* Amount & multiples */
   const initialAmount = useMemo(() => {
@@ -365,117 +636,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
     (amtsAll[0] <= haveWei[0]) &&
     (amtsAll[1] <= haveWei[1]) &&
     (amtsAll[2] <= haveWei[2]);
-
-  /* Referrer (badge-gated) */
-  const isAddr48 = (a?: string): a is Address => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
-
-  const [referrerInput, setReferrerInput] = useState<string>(DEFAULT_REFERRER);
-  const [refValid, setRefValid] = useState<boolean | null>(null);
-  const [refChecking, setRefChecking] = useState(false);
-  const [showFullRef, setShowFullRef] = useState(false);
-  const refInputEl = useRef<HTMLInputElement>(null);
-
-  const [existingReferrer, setExistingReferrer] = useState<Address | null>(null);
-  const [refLocked, setRefLocked] = useState(false);
-  const [refLoading, setRefLoading] = useState(false);
-
-  async function isReferrerEligible(addr: Address): Promise<boolean> {
-    try {
-      const [wl, staked] = await Promise.all([
-        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "isWhitelisted", args: [addr] }) as Promise<boolean>,
-        publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "userTotalStaked", args: [addr] }) as Promise<bigint>,
-      ]);
-      return wl || staked > 0n;
-    } catch {
-      return true;
-    }
-  }
-
-  useEffect(() => {
-    (async () => {
-      if (!address) {
-        setExistingReferrer(null);
-        setRefLocked(false);
-        setRefLoading(false);
-        setReferrerInput(DEFAULT_REFERRER);
-        setRefValid(null);
-        return;
-      }
-      setRefLoading(true);
-      try {
-        const r = await publicClient.readContract({
-          address: stakingContract,
-          abi: STAKING_READS_ABI,
-          functionName: "referrerOf",
-          args: [address],
-        }) as Address;
-
-        const isZero = /^0x0{40}$/i.test(r);
-        if (!isZero) {
-          setExistingReferrer(r);
-          setRefLocked(true);
-          setReferrerInput(r);
-          setRefValid(true);
-          setRefChecking(false);
-        } else {
-          const stored = getReferrer();
-          const candidate = (stored && isAddr48(stored) && !(address && eqAddr(stored, address)))
-            ? stored
-            : DEFAULT_REFERRER;
-          setExistingReferrer(null);
-          setRefLocked(false);
-          setReferrerInput(candidate);
-          setRefValid(null);
-          setRefChecking(false);
-        }
-      } catch {
-        const stored = getReferrer();
-        const candidate = (stored && isAddr48(stored) && !(address && eqAddr(stored, address)))
-          ? stored
-          : DEFAULT_REFERRER;
-        setExistingReferrer(null);
-        setRefLocked(false);
-        setReferrerInput(candidate);
-        setRefValid(null);
-        setRefChecking(false);
-      } finally {
-        setRefLoading(false);
-      }
-    })();
-  }, [address, publicClient]);
-
-  useEffect(() => {
-    if (!preferred) {
-      setRefValid(true);
-      setRefChecking(false);
-      setReferrerInput(DEFAULT_REFERRER);
-      return;
-    }
-    if (refLocked) {
-      setRefChecking(false);
-      setRefValid(true);
-      return;
-    }
-    const val = referrerInput?.trim();
-    if (!val) { setRefValid(null); setRefChecking(false); return; }
-    if (!isAddr48(val)) { setRefValid(false); setRefChecking(false); return; }
-    if (address && isAddr48(val) && eqAddr(val, address)) {
-      setRefValid(false); setRefChecking(false); return;
-    }
-    setRefChecking(true);
-    const t = setTimeout(async () => {
-      try { setRefValid(await isReferrerEligible(val as Address)); }
-      finally { setRefChecking(false); }
-    }, 400);
-    return () => clearTimeout(t);
-  }, [referrerInput, preferred, refLocked, address]);
-
-  function finalReferrer(): Address {
-    if (existingReferrer && !eqAddr(existingReferrer, address)) return existingReferrer;
-    const v = (referrerInput || "").trim();
-    if (address && isAddr48(v) && eqAddr(v, address)) return DEFAULT_REFERRER;
-    return isAddr48(v) ? (v as Address) : DEFAULT_REFERRER;
-  }
 
   async function isPaused(): Promise<boolean | null> {
     try { return (await publicClient.readContract({ address: stakingContract, abi: STAKING_READS_ABI, functionName: "paused" })) as boolean; }
@@ -677,7 +837,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
       setIsStaking(true);
       const hash = await sendStakeTx(ref);
-      // Show global spinner & let it resolve to success/close + trigger refresh
       openTxOverlay(hash as Hex, "Waiting for confirmation…");
 
       const totalHuman =
@@ -700,7 +859,6 @@ const StakingModal: React.FC<StakingModalProps> = ({
         nextClaimAt,
       });
 
-      // Close the staking modal immediately; overlay keeps spinning until confirmed
       setIsStaking(false);
       onClose();
 
@@ -719,40 +877,35 @@ const StakingModal: React.FC<StakingModalProps> = ({
   const [consented, setConsented] = useState(false);
   const [showDisclosure, setShowDisclosure] = useState(false);
 
-  // Load persisted consent whenever address changes
   useEffect(() => {
     try {
       const k = makeConsentKey(address);
       setConsented(localStorage.getItem(k) === "1");
-    } catch {
-      // ignore storage errors
-    }
+    } catch {}
   }, [address]);
 
-  // Helper to update state + persist
   const setConsentedPersist = (v: boolean) => {
     setConsented(v);
     try {
       const k = makeConsentKey(address);
       if (v) localStorage.setItem(k, "1");
       else localStorage.removeItem(k);
-    } catch {
-      // ignore storage errors
-    }
+    } catch {}
   };
 
   const mainDisabled =
-   isApproving || isStaking || !address ||
+    isApproving || isStaking || !address ||
     amountNum < min || (!isMultipleOk && mStep > 1) ||
     validCompositions.length === 0 || !!chainIssue ||
     (yWei + sWei + pWei === 0n) || !hasSufficientBalances ||
-    (preferred && refValid === false) ||
-    !consented; // gate by consent only
+    (showReferralUI && !refLocked && refValid !== true) || // ← add this
+    !consented;
+
 
   const mainBtnText =
-   isApproving ? "Approving…" :
-   isStaking ? "Sending stake…" :
-   "Approve & Stake";
+    isApproving ? "Approving…" :
+    isStaking ? "Sending stake…" :
+    "Approve & Stake";
 
   const formatWei = (wei: bigint, dec: number) => prettyFixed(wei, dec, 2);
 
@@ -879,8 +1032,8 @@ const StakingModal: React.FC<StakingModalProps> = ({
                 </div>
               </div>
 
-              {/* Referrer (only for preferred wallets) */}
-              {preferred ? (
+              {/* Referrer (policy + on-chain lock) */}
+              {showReferralUI ? (
                 <div className="space-y-2">
                   <label className="block text-sm font-medium">Referrer Address</label>
                   <div className="relative flex items-center gap-2">
@@ -924,7 +1077,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
 
                   {refValid === false && (
                     <p className="text-xs text-rose-400">
-                      {address && isAddr48(referrerInput) && eqAddr(referrerInput, address)
+                      {walletAddr && isAddr48(referrerInput) && eqAddr(referrerInput, walletAddr)
                         ? "Referrer cannot be your own address."
                         : "Referrer is not eligible (must be whitelisted or have staked before)."}
                     </p>
@@ -937,8 +1090,8 @@ const StakingModal: React.FC<StakingModalProps> = ({
                 </div>
               ) : null}
 
-              {/* Composition (only for preferred wallets) */}
-              {preferred && (
+              {/* Composition (show when policy actually unlocks it) */}
+              {showCompUI && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h4 className="text-sm font-semibold">Choose a composition</h4>
@@ -978,9 +1131,9 @@ const StakingModal: React.FC<StakingModalProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
                     { label: YY_SYMBOL, need: amtsAll[0], have: haveWei[0], dec: decs[0], show: true },
-                    { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1], show: preferred },
-                    { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2], show: preferred },
-                  ].filter(r => r.show).map((r) => {
+                    { label: SY_SYMBOL, need: amtsAll[1], have: haveWei[1], dec: decs[1], show: (selected[1] ?? 0) > 0 },
+                    { label: PY_SYMBOL, need: amtsAll[2], have: haveWei[2], dec: decs[2], show: (selected[2] ?? 0) > 0 },
+                  ].filter((r) => r.show).map((r) => {
                     const lacking = r.need > r.have;
                     return (
                       <div

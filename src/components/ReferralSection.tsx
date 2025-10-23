@@ -4,22 +4,37 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient as useWagmiPublicClient } from "wagmi";
 import {
   Gift, RefreshCw, Wallet, Award, Star as StarIcon, Crown, Copy, Check,
-  Users, Search, Filter, Link as LinkIcon, X, PieChart
+  Users, Search, Filter, Link as LinkIcon, X, PieChart, Loader2
 } from "lucide-react";
 import { useReferralProfile, fmt } from "@/hooks/useReferralProfile";
 import { useEarningsRPC } from "@/hooks/useEarningsRPC";
 import ReferralClaimsSheetContent from "@/components/ReferralClaimsSheetContent";
+
+import type { Address } from "viem";
+import { bsc } from "viem/chains";
+import { createPublicClient, http } from "viem";
 
 /* ============================================================
    Constants
 ============================================================ */
 const MAX_LEVEL = 15;
 const PAGE_SIZE = 12;
-// Vite env var (IMPORTANT)
 const SUBGRAPH_URL = import.meta.env.VITE_SUBGRAPH_YEARN as string;
+
+// staking contract from env (same as StakingModal)
+const STAKING_CONTRACT = (import.meta.env.VITE_BASE_CONTRACT_ADDRESS ?? "") as Address;
+
+// ABI for eligibility checks
+const STAKING_READS_ABI = [
+  { type: "function", name: "isWhitelisted", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "bool" }] },
+  { type: "function", name: "userTotalStaked", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
+] as const;
+
+type EligibilityState = "checking" | "eligible" | "ineligible";
+const RETRY_DELAY_MS = 12_000; // show the manual "Check again" after this delay
 
 /* ============================================================
    Types for subgraph-based levels
@@ -72,7 +87,7 @@ function computeFilteredIds(
 }
 
 /* ============================================================
-   Subgraph hook: pull up to 15 levels + user earnings totals
+   Subgraph hook
 ============================================================ */
 function useReferralLevelsFromSubgraph(
   address?: `0x${string}`,
@@ -154,8 +169,7 @@ function useReferralLevelsFromSubgraph(
           setLevels(out);
           setTotals(sgTotals);
         }
-      } catch (e) {
-        console.error("useReferralLevelsFromSubgraph error:", e);
+      } catch {
         if (!cancelled) {
           setLevels([]);
           setTotals({ starEarningsTotal: 0n, goldenEarningsTotal: 0n });
@@ -173,7 +187,6 @@ function useReferralLevelsFromSubgraph(
 
 /* ============================================================
    AppKit-style Bottom Sheet
-   - Auto grows with content (ResizeObserver) up to `maxVh` then scrolls
 ============================================================ */
 function SheetPortal({
   open,
@@ -205,7 +218,7 @@ function SheetPortal({
   useEffect(() => {
     if (!open || !bodyRef.current) return;
 
-    const headerPx = 64; // header height
+    const headerPx = 64;
 
     const compute = () => {
       const node = bodyRef.current;
@@ -225,9 +238,7 @@ function SheetPortal({
 
     const RO: any = (window as any).ResizeObserver;
     if (RO) {
-      if (!roRef.current) {
-        roRef.current = new RO(() => scheduleCompute());
-      }
+      if (!roRef.current) roRef.current = new RO(() => scheduleCompute());
       if (bodyRef.current) roRef.current?.observe(bodyRef.current);
     }
 
@@ -264,7 +275,6 @@ function SheetPortal({
         role="dialog"
         aria-modal="true"
       >
-        {/* Header */}
         <div className="px-5 pt-4 pb-3 border-b border-white/10">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div className="justify-self-center h-1 w-12 rounded-full bg-white/20" aria-hidden="true" />
@@ -281,7 +291,6 @@ function SheetPortal({
           </div>
         </div>
 
-        {/* Body (scrolls when we hit the cap) */}
         <div
           ref={bodyRef}
           className="px-5 overflow-y-auto"
@@ -299,7 +308,7 @@ function SheetPortal({
 }
 
 /* ============================================================
-   Desktop Modal (glass, centered) — for My Claims on web
+   Desktop Modal
 ============================================================ */
 function DesktopModal({
   open,
@@ -372,6 +381,18 @@ const ReferralSection: React.FC<Props> = ({
   const isMobile = useIsMobile(640);
   const { address } = useAccount();
 
+  // public client
+  const wagmiPublic = useWagmiPublicClient({ chainId: bsc.id });
+  const publicClient = useMemo(
+    () =>
+      wagmiPublic ??
+      createPublicClient({
+        chain: bsc,
+        transport: http(import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed1.bnbchain.org"),
+      }),
+    [wagmiPublic]
+  );
+
   // Lifetime referral via RPC (Y token 18d)
   const { totals: rpcTotals, loading: rpcLoading } = useEarningsRPC(address || undefined);
   const lifetimeReferralStr = rpcLoading ? "…" : fmt(rpcTotals?.lifeSum ?? 0n, 18);
@@ -402,9 +423,56 @@ const ReferralSection: React.FC<Props> = ({
 
   const L1 = levelMap.get(1) ?? { totalYY: 0n, rows: [] };
 
-  // SSR-safe link
+  // -------------------- Eligibility (one-shot + manual refresh) --------------------
+  const [eligibility, setEligibility] = useState<EligibilityState>("checking");
+  const [lastCheckedAt, setLastCheckedAt] = useState<number>(Date.now());
+
+  const canRetry = eligibility !== "checking" && Date.now() - lastCheckedAt >= RETRY_DELAY_MS;
+
+  const checkEligibility = async (addr?: Address) => {
+    const isAddr = (a?: string) => !!a && /^0x[a-fA-F0-9]{40}$/.test(a);
+    const stakingOk = isAddr(STAKING_CONTRACT);
+
+    setEligibility("checking");
+    setLastCheckedAt(Date.now());
+
+    if (!addr || !stakingOk) {
+      setEligibility("ineligible");
+      return;
+    }
+
+    try {
+      const [wl, staked] = await Promise.all([
+        publicClient.readContract({
+          address: STAKING_CONTRACT,
+          abi: STAKING_READS_ABI,
+          functionName: "isWhitelisted",
+          args: [addr],
+        }) as Promise<boolean>,
+        publicClient.readContract({
+          address: STAKING_CONTRACT,
+          abi: STAKING_READS_ABI,
+          functionName: "userTotalStaked",
+          args: [addr],
+        }) as Promise<bigint>,
+      ]);
+      const ok = Boolean(wl) || (staked ?? 0n) > 0n;
+      setEligibility(ok ? "eligible" : "ineligible");
+    } catch {
+      // fail-closed
+      setEligibility("ineligible");
+    }
+  };
+
+  // run once on mount / address change; no continuous polling
+  useEffect(() => {
+    checkEligibility(address as Address | undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, publicClient]);
+
+  // SSR-safe link (only when eligible)
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const link = origin && address ? `${origin}?ref=${address}` : "";
+  const link = eligibility === "eligible" && origin && address ? `${origin}?ref=${address}` : "";
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [claimsOpen, setClaimsOpen] = useState(false);
@@ -491,7 +559,6 @@ const ReferralSection: React.FC<Props> = ({
         {/* Tiles (Stats on the card) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mt-3">
           <Tile icon={<Wallet className="w-4.5 h-4.5" />} label="Total Staked" value={loading ? "…" : `${fmt(myTotalYY ?? 0n, decimals?.yy)} YY`} />
-          {/* Referral = lifetime referrals (RPC) */}
           <Tile icon={<Award className="w-4.5 h-4.5" />} label="Referral" value={lifetimeReferralStr} />
           <Tile icon={<StarIcon className="w-4.5 h-4.5" />} label="Star" value={loading ? "…" : fmt(totals.starEarningsTotal, 18)} />
           <Tile icon={<Crown className="w-4.5 h-4.5" />} label="Golden" value={loading ? "…" : fmt(totals.goldenEarningsTotal, 18)} />
@@ -504,11 +571,46 @@ const ReferralSection: React.FC<Props> = ({
               <LinkIcon className="w-4.5 h-4.5 text-indigo-300" />
               Share Link
             </div>
-            <div className="flex items-center gap-2 rounded-2xl bg-white/8 px-2.5 py-2 ring-1 ring-white/10">
-              <span className="text-[12px] text-gray-100/90 font-mono truncate flex-1" title={link || "—"}>
-                {link || "—"}
-              </span>
-              <CopyIconButton text={link} />
+
+            {/* Share Link Content — eligibility-driven */}
+            <div className="flex items-center gap-2 rounded-2xl bg-white/8 px-2.5 py-2 ring-1 ring-white/10 min-h-[40px]">
+              {eligibility === "checking" && (
+                <div className="flex items-center gap-2 text-[12px] text-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Checking eligibility…
+                </div>
+              )}
+
+              {eligibility === "ineligible" && (
+                <div className="flex w-full items-center justify-between gap-2">
+                  <div className="text-[12px] text-amber-200">
+                    Stake or get whitelisted to unlock your referral link.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => checkEligibility(address as Address | undefined)}
+                    disabled={!canRetry}
+                    className={[
+                      "rounded-lg px-2.5 py-1.5 text-[12px] font-semibold",
+                      canRetry
+                        ? "bg-white/10 hover:bg-white/15 text-white"
+                        : "bg-white/5 text-gray-400 cursor-not-allowed"
+                    ].join(" ")}
+                    title={canRetry ? "Check again" : "Please wait a moment…"}
+                  >
+                    {canRetry ? "Check again" : "Please wait…"}
+                  </button>
+                </div>
+              )}
+
+              {eligibility === "eligible" && (
+                <>
+                  <span className="text-[12px] text-gray-100/90 font-mono truncate flex-1" title={link}>
+                    {link}
+                  </span>
+                  <CopyIconButton text={link} />
+                </>
+              )}
             </div>
           </div>
 
@@ -768,8 +870,7 @@ function CopyIconButton({ text, className }: { text: string; className?: string 
       ta.value = text;
       ta.style.position = "fixed";
       ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.focus(); ta.select();
+      document.body.appendChild(ta); ta.focus(); ta.select();
       document.execCommand?.("copy");
       document.body.removeChild(ta);
       setCopied(true);
@@ -918,8 +1019,8 @@ function Tabs(props: {
           <div className="px-4 py-3 border-b border-white/10">
             <div className="text-[12px] text-gray-300/90 mb-1">Share Link</div>
             <div className="flex items-center gap-2 rounded-xl bg-white/8 px-3 py-2 ring-1 ring-white/10">
-              <span className="text-[12px] text-gray-100 font-mono truncate" title={link}>{link}</span>
-              <CopyIconButton text={link} />
+              <span className="text-[12px] text-gray-100 font-mono truncate" title={link}>{link || "—"}</span>
+              {link && <CopyIconButton text={link} />}
             </div>
           </div>
           <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">

@@ -70,7 +70,14 @@ if (!globalThis.__APPKIT_CREATED__) {
     networks,
     projectId,
     metadata,
-    features: { analytics: true },
+
+    features: {
+      analytics: false,
+      email: true, // keep email login enabled
+      socials: ["google", "x", "discord", "apple"], // order respected; trim if you want fewer
+      emailShowWallets: true,   // <- show wallet grid on the first screen
+    },
+    allWallets: "SHOW",
     ...appKitTheme,
   });
   globalThis.__APPKIT_CREATED__ = true;

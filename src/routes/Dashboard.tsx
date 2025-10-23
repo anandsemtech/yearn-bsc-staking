@@ -1,7 +1,6 @@
-// src/routes/Dashboard.tsx
 import React, { useMemo, useState, useEffect } from "react";
 import { useAccount } from "wagmi";
-import { Navigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import type { Address } from "viem";
 
 import PackageCards, { PackageData } from "@/components/PackageCards";
@@ -14,21 +13,10 @@ import HonoraryNftPopup from "@/components/HonoraryNftPopup";
 
 import ReferralSection from "@/components/ReferralSection";
 import MobileFooterNav from "@/components/MobileFooterNav";
-
-// ⭐ New: Star & Golden journey panel (dark-only, robust GQL with failover)
 import StarJourneyPanel from "@/components/stars/StarJourneyPanel";
 
-// Lightweight referrer read-only helpers
 import { getReferrer, eqAddr, shortAddr } from "@/lib/referrer";
-
-// Copy icons
 import { Copy, Check } from "lucide-react";
-
-/* === EXACT preferred badge contracts from env === */
-const YEARNCHAMPNFT = (import.meta.env.VITE_YEARNCHAMPNFT ||
-  "0xb065ab52d4aE43dba2b8b87cf6F6873becD919a3") as Address;
-const YEARNBUDDYNFT = (import.meta.env.VITE_YEARNBUDDYNFT ||
-  "0x18A562d77336FAEca3C6c0dA157B94C80d5359bD") as Address;
 
 const GlassPanel: React.FC<
   React.PropsWithChildren<{ title?: string; className?: string; id?: string }>
@@ -61,61 +49,35 @@ const GlassPanel: React.FC<
 export default function Dashboard() {
   const [selectedPackage, setSelectedPackage] = useState<PackageData | null>(null);
   const { address, isConnected } = useAccount();
-  if (!isConnected || !address) return <Navigate to="/" replace />;
+  const navigate = useNavigate();
+
+  /** Redirect in an effect (keeps hook order stable every render) */
+  useEffect(() => {
+    if (!isConnected || !address) navigate("/", { replace: true });
+  }, [isConnected, address, navigate]);
+
+  /** Always call hooks; pass nullable address safely */
+  const wallet = isConnected && address ? (address as Address) : (null as unknown as Address);
 
   const { rows, loading, error, refresh } = useActiveStakes({
-    address,
+    address: wallet as Address,          // hook should tolerate nullish
     requireDirtyOrStale: true,
     softMaxAgeMs: 120_000,
     ttlMs: 60_000,
   });
 
-  const { badges, show, dismiss, loading: badgesLoading } = useHonoraryNft({
-    owner: address ?? null,
-    contracts: [
-      { address: YEARNCHAMPNFT, label: "YearnChamp" },
-      { address: YEARNBUDDYNFT, label: "YearnBuddy" },
-    ],
-  });
+  const { badges, show, dismiss, loading: badgesLoading } = useHonoraryNft(wallet);
 
-  const preferredSet = useMemo(
-    () => new Set([YEARNCHAMPNFT.toLowerCase(), YEARNBUDDYNFT.toLowerCase()]),
-    []
-  );
+  /** Preferred for now = any pass owned */
+  const hasPreferred = useMemo(() => (badges || []).length > 0, [badges]);
 
-  const userHasPreferredBadge = useMemo(() => {
-    return (badges || []).some(
-      (b) =>
-        b?.owned &&
-        b?.address &&
-        preferredSet.has(String(b.address).toLowerCase())
-    );
-  }, [badges, preferredSet]);
-
-  const [hasPreferred, setHasPreferred] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setHasPreferred(userHasPreferredBadge), 150);
-    return () => clearTimeout(t);
-  }, [userHasPreferredBadge]);
-
-  const honoraryItems = useMemo(
-    () =>
-      (badges || [])
-        .filter((b) => b.owned)
-        .map((b) => ({
-          title: b.label,
-          imageUrl: b.imageUrl,
-          address: b.address,
-        })),
-    [badges]
-  );
+  const honoraryItems = badges;
 
   const [forceHonoraryOpen, setForceHonoraryOpen] = useState(false);
   useEffect(() => {
     const openHandler = () => setForceHonoraryOpen(true);
     window.addEventListener("honorary:open", openHandler as EventListener);
-    return () =>
-      window.removeEventListener("honorary:open", openHandler as EventListener);
+    return () => window.removeEventListener("honorary:open", openHandler as EventListener);
   }, []);
 
   // Footer state + handlers
@@ -127,22 +89,18 @@ export default function Dashboard() {
     setActiveFooter("referrals");
     window.dispatchEvent(new CustomEvent("referrals:open"));
   };
-
   const openClaims = () => {
     setActiveFooter("claims");
     window.dispatchEvent(new CustomEvent("claims:open"));
   };
-
   const openBalances = () => {
     setActiveFooter("balances");
     window.dispatchEvent(new CustomEvent("balances:open"));
   };
-
   const openSettings = () => {
     setActiveFooter("settings");
     window.dispatchEvent(new CustomEvent("settings:open"));
   };
-
   const openWallet = async () => {
     setActiveFooter("wallet");
     const anyWin = window as any;
@@ -156,7 +114,7 @@ export default function Dashboard() {
     window.dispatchEvent(new CustomEvent("wallet:open"));
   };
 
-  /** 🔹 Lightweight referrer display (no validation calls) */
+  /** 🔹 Lightweight referrer display */
   const storedRef = useMemo(() => getReferrer(), []);
   const isSelfRef = useMemo(() => eqAddr(address, storedRef), [address, storedRef]);
 
@@ -171,12 +129,10 @@ export default function Dashboard() {
     } catch {}
   };
 
-  /* Show Star Journey only when wallet has a preferred badge and badges have finished loading */
   const showStarJourney = !badgesLoading && hasPreferred;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 pb-[92px] md:pb-8">
-
       {/* Read-only referrer sticker */}
       {storedRef && (
         <div className="mb-4">
@@ -238,11 +194,11 @@ export default function Dashboard() {
         <ActivePackages rows={rows} loading={loading} error={error} onRefresh={refresh} />
       </GlassPanel>
 
-      {/* ⭐ NEW: Affiliate Star Journey — only when user has preferred NFT badge */}
+      {/* ⭐ Affiliate Star Journey — only when user has a pass */}
       {showStarJourney && (
         <GlassPanel title="Affiliate Star Journey" className="mt-8" id="star-journey">
           <StarJourneyPanel
-            address={address}
+            address={address as Address}
             goldenStarWindowDays={30}
             star1DirectNeeded={5}
             higherStarChildNeeded={2}
@@ -260,7 +216,6 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Mobile footer — shows claims/referrals only when badge present */}
       <MobileFooterNav
         hasPreferredBadge={!badgesLoading && hasPreferred}
         active={activeFooter}
@@ -271,7 +226,6 @@ export default function Dashboard() {
         onOpenWallet={openWallet}
       />
 
-      {/* Keep ReferralSection mounted (but hidden) so its sheets & listeners work from the menu */}
       <div className="hidden">
         <ReferralSection hasPreferredBadge={!badgesLoading && hasPreferred} />
       </div>
