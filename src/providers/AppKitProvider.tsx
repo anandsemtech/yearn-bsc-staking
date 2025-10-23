@@ -11,6 +11,8 @@ import { http } from "viem";
 declare global {
   // avoid duplicate AppKit init in HMR/dev
   var __APPKIT_CREATED__: boolean | undefined;
+  // allow inspecting the instance in dev (e.g. appKit.getState().metadata)
+  var appKit: ReturnType<typeof createAppKit> | undefined;
 }
 
 const queryClient = new QueryClient();
@@ -29,10 +31,12 @@ const bscRpc =
   "https://bsc-dataseed1.bnbchain.org";
 
 // ---------------------------
+//
 // URL / metadata handling
+//
 // ---------------------------
 
-/** Coerces any string into a valid origin ("https://" assumed if missing) */
+/** Coerces any string into a valid origin ("https://" assumed if missing). */
 const coerceOrigin = (v?: string) => {
   if (!v) return undefined;
   try {
@@ -50,9 +54,11 @@ const coerceOrigin = (v?: string) => {
 
 const runtimeOrigin =
   typeof window !== "undefined" ? window.location.origin : undefined;
-const envSite = coerceOrigin(import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined);
+const envSite = coerceOrigin(
+  import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined
+);
 
-// If running locally, prefer localhost; otherwise use runtime or env
+// If running locally, prefer localhost; otherwise use runtime or env.
 const fallback =
   runtimeOrigin?.includes("localhost") || runtimeOrigin?.includes("127.0.0.1")
     ? "http://localhost:5173"
@@ -67,16 +73,12 @@ const metadata = {
   name: "Yearn Staking — AppKit Starter",
   description: "Minimal connect → dashboard scaffold using Reown AppKit + Wagmi",
   url: siteOrigin,
-  // Put a square PNG first; keep SVG as a fallback
+  // Put a square PNG first; keep SVG as a fallback (some wallets ignore SVG).
   icons: [
-    `${siteOrigin}/assets/yearntogether.png`,                 // 256×256 PNG (recommended)
-    `${siteOrigin}/assets/YearntogetherLight.svg` // optional SVG
+    `${siteOrigin}/assets/yearntogether.png`, // 256×256 PNG recommended
+    `${siteOrigin}/assets/YearntogetherLight.svg`,
   ],
 };
-
-
-
-
 
 // ---------------------------
 // Wagmi + AppKit setup
@@ -107,8 +109,7 @@ const appKitTheme = {
 
 // Create the AppKit instance only once
 if (!globalThis.__APPKIT_CREATED__) {
-  // Save the instance so you can debug it later
-  globalThis.appKit = createAppKit({
+  const instance = createAppKit({
     adapters: [wagmiAdapter],
     networks,
     projectId,
@@ -122,9 +123,14 @@ if (!globalThis.__APPKIT_CREATED__) {
     allWallets: "SHOW",
     ...appKitTheme,
   });
+
+  // Expose for console debugging in dev (optional)
+  if (import.meta.env.DEV) {
+    globalThis.appKit = instance;
+  }
+
   globalThis.__APPKIT_CREATED__ = true;
 }
-
 
 // ---------------------------
 // Provider wrapper
