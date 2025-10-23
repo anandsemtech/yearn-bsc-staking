@@ -6,39 +6,73 @@ import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
 import { createAppKit } from "@reown/appkit/react";
 import type { AppKitNetwork } from "@reown/appkit/networks";
 import { bsc } from "@reown/appkit/networks";
-import { http } from "viem"; // <-- add this
+import { http } from "viem";
 
 declare global {
-  // avoids duplicate AppKit init in HMR/dev
+  // avoid duplicate AppKit init in HMR/dev
   var __APPKIT_CREATED__: boolean | undefined;
 }
 
 const queryClient = new QueryClient();
 
+// ---------------------------
+// Environment + Network setup
+// ---------------------------
 const projectId = import.meta.env.VITE_REOWN_PROJECT_ID as string;
 if (!projectId) {
   throw new Error("Missing VITE_REOWN_PROJECT_ID in environment");
 }
 
 const networks = [bsc] as [AppKitNetwork, ...AppKitNetwork[]];
-
-// Your RPC (use your own; this is a sane default)
 const bscRpc =
   (import.meta.env.VITE_BSC_RPC_URL as string) ||
   "https://bsc-dataseed1.bnbchain.org";
 
+// ---------------------------
+// URL / metadata handling
+// ---------------------------
+
+/** Coerces any string into a valid origin ("https://" assumed if missing) */
+const coerceOrigin = (v?: string) => {
+  if (!v) return undefined;
+  try {
+    const u = new URL(v);
+    return u.origin;
+  } catch {
+    try {
+      const u2 = new URL(`https://${v}`);
+      return u2.origin;
+    } catch {
+      return undefined;
+    }
+  }
+};
+
+const runtimeOrigin =
+  typeof window !== "undefined" ? window.location.origin : undefined;
+const envSite = coerceOrigin(import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined);
+
+// If running locally, prefer localhost; otherwise use runtime or env
+const fallback =
+  runtimeOrigin?.includes("localhost") || runtimeOrigin?.includes("127.0.0.1")
+    ? "http://localhost:5173"
+    : "https://stake.yearntogether.com";
+
+const siteOrigin = runtimeOrigin ?? envSite ?? fallback;
+
+// ---------------------------
+// Metadata (no more mismatch!)
+// ---------------------------
 const metadata = {
   name: "Yearn Staking — AppKit Starter",
   description: "Minimal connect → dashboard scaffold using Reown AppKit + Wagmi",
-  url:
-    (import.meta.env.VITE_PUBLIC_SITE_URL as string) ||
-    (typeof window !== "undefined"
-      ? window.location.origin
-      : "http://localhost:5173"),
-  icons: ["https://avatars.githubusercontent.com/u/179229932"],
+  url: siteOrigin,
+  icons: [`${siteOrigin}/assets/YearntogetherLight.svg`],
 };
 
-// IMPORTANT: Force reads/writes to your BSC RPC (not WalletConnect RPC)
+// ---------------------------
+// Wagmi + AppKit setup
+// ---------------------------
 const wagmiAdapter = new WagmiAdapter({
   projectId,
   networks,
@@ -46,7 +80,6 @@ const wagmiAdapter = new WagmiAdapter({
   transports: {
     [bsc.id]: http(bscRpc),
   },
-  // You can also set `storage` or `timeout` here if needed
 });
 
 const appKitTheme = {
@@ -64,18 +97,18 @@ const appKitTheme = {
   },
 };
 
+// Create the AppKit instance only once
 if (!globalThis.__APPKIT_CREATED__) {
   createAppKit({
     adapters: [wagmiAdapter],
     networks,
     projectId,
     metadata,
-
     features: {
       analytics: false,
-      email: true, // keep email login enabled
-      socials: ["google", "x", "discord", "apple"], // order respected; trim if you want fewer
-      emailShowWallets: true,   // <- show wallet grid on the first screen
+      email: true,
+      socials: ["google", "x", "discord", "apple"],
+      emailShowWallets: true,
     },
     allWallets: "SHOW",
     ...appKitTheme,
@@ -83,10 +116,15 @@ if (!globalThis.__APPKIT_CREATED__) {
   globalThis.__APPKIT_CREATED__ = true;
 }
 
+// ---------------------------
+// Provider wrapper
+// ---------------------------
 export function AppKitProvider({ children }: PropsWithChildren) {
   return (
     <WagmiProvider config={wagmiAdapter.wagmiConfig}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {children}
+      </QueryClientProvider>
     </WagmiProvider>
   );
 }
