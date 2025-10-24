@@ -967,7 +967,10 @@ const StakingModal: React.FC<StakingModalProps> = ({
               <div className="space-y-2">
                 <label className="block text-sm font-medium">Stake Amount</label>
                 <div className="relative">
-                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-semibold tracking-wide">
+                    $YEARN
+                  </span>
+
                   <input
                     type="number"
                     value={amount}
