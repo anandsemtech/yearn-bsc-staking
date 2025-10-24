@@ -967,12 +967,13 @@ const StakingModal: React.FC<StakingModalProps> = ({
               <div className="space-y-2">
                 <label className="block text-sm font-medium">Stake Amount</label>
                 <div className="relative">
-                  {/* prefix text */}
+                  {/* $YEARN prefix */}
                   <span
                     className="pointer-events-none select-none absolute inset-y-0 left-3 flex items-center text-gray-400 font-semibold"
                     aria-hidden="true"
                   >
-                    <span className="text-sm tracking-wide">$YEARN</span>
+                    {/* responsive text size */}
+                    <span className="text-xs sm:text-sm tracking-wide">$YEARN</span>
                   </span>
 
                   <input
@@ -982,7 +983,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
                     min={min}
                     step={mStep}
                     inputMode="decimal"
-                    // ⬇️ increase left padding to make room for "$YEARN"
+                    // ⬆️ adjusted padding for prefix
                     className={`w-full pl-24 pr-4 py-3 rounded-xl border text-gray-100 placeholder:text-gray-400 focus:ring-2 focus:border-transparent
                       ${(!isMultipleOk && mStep > 1) || !meetsMin
                         ? "bg-rose-900/20 border-rose-700 focus:ring-rose-500"
@@ -990,6 +991,7 @@ const StakingModal: React.FC<StakingModalProps> = ({
                     aria-invalid={(!isMultipleOk && mStep > 1) || !meetsMin}
                   />
                 </div>
+
 
 
                 <div className="flex flex-col gap-2">
